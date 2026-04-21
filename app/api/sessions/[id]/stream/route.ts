@@ -1,0 +1,78 @@
+import { runGmTurn } from '../../../../../lib/ai/gm-agent';
+import { createSupabaseServerClient } from '../../../../../lib/db/server';
+import type { MessageRow } from '../../../../../lib/db/types';
+
+export const runtime = 'nodejs';
+
+/**
+ * GET /api/sessions/:id/stream?message=... — SSE stream of the GM turn.
+ * The user message has already been persisted by postUserMessage.
+ */
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id: sessionId } = await params;
+  const url = new URL(req.url);
+  const userMessage = url.searchParams.get('message') ?? '';
+  if (!userMessage) return new Response('missing message', { status: 400 });
+
+  const supabase = await createSupabaseServerClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) return new Response('unauthorized', { status: 401 });
+
+  const { data: history } = await supabase
+    .from('messages')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const write = (event: string, data: unknown) => {
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      };
+
+      const fullText: string[] = [];
+      try {
+        for await (const ev of runGmTurn({
+          sessionId,
+          userMessage,
+          history: (history ?? []) as MessageRow[],
+        })) {
+          if (ev.type === 'text_delta') {
+            fullText.push(ev.delta);
+            write('delta', { text: ev.delta });
+          } else if (ev.type === 'dice_request') {
+            write('dice', ev.roll);
+          } else if (ev.type === 'entity_recorded') {
+            write('entity', { kind: ev.kind, name: ev.name });
+          } else if (ev.type === 'memory_recalled') {
+            write('memory', { query: ev.query, result: ev.result });
+          } else if (ev.type === 'error') {
+            write('error', { message: ev.message });
+          } else if (ev.type === 'done') {
+            // persist the assembled GM message
+            const content = fullText.join('').trim();
+            if (content) {
+              await supabase
+                .from('messages')
+                .insert({ session_id: sessionId, author_kind: 'gm', content });
+            }
+            write('done', { length: content.length });
+          }
+        }
+      } catch (err) {
+        write('error', { message: err instanceof Error ? err.message : 'stream error' });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    },
+  });
+}

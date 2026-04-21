@@ -39,6 +39,9 @@ export default async function CampaignPage({ params }: { params: Promise<Params>
           <Link href={`/campaigns/${campaign.id}/characters/new`}>
             <BtnPrimary icon="⚜">Créer un personnage</BtnPrimary>
           </Link>
+          <Link href={`/campaigns/${campaign.id}/play`}>
+            <BtnPrimary icon="✦">Veiller au coin du feu</BtnPrimary>
+          </Link>
         </div>
       </section>
     </main>
