@@ -473,28 +473,39 @@ function PlayerPanel({
         </ul>
       </section>
 
-      {player && <PlayerStats player={player} onChanged={onRefresh} />}
+      {player && <CharacterStats character={player} onChanged={onRefresh} />}
+      {companions.map((c) => (
+        <CharacterStats key={c.id} character={c} onChanged={onRefresh} />
+      ))}
     </aside>
   );
 }
 
-function PlayerStats({ player, onChanged }: { player: CharacterRow; onChanged: () => void }) {
-  const pct = Math.round((player.current_hp / Math.max(1, player.max_hp)) * 100);
-  const slots = player.spell_slots ?? {};
+function CharacterStats({
+  character,
+  onChanged,
+}: {
+  character: CharacterRow;
+  onChanged: () => void;
+}) {
+  const pct = Math.round((character.current_hp / Math.max(1, character.max_hp)) * 100);
+  const slots = character.spell_slots ?? {};
+  const badge = character.is_ai ? '◉' : '✧';
   return (
-    <section className="px-5 py-5">
+    <section className="border-t border-line px-5 py-5">
       <p className="mb-3 font-display text-[10px] uppercase tracking-[0.3em] text-gold">
-        ✧ {player.name}
+        {badge} {character.name}
+        {character.is_ai && <span className="ml-2 text-text-mute">· allié</span>}
       </p>
       <Stat
         label="Points de vie"
-        value={`${player.current_hp} / ${player.max_hp}`}
+        value={`${character.current_hp} / ${character.max_hp}`}
         pct={pct}
         barColor="linear-gradient(90deg, #5a1810, #9a3028)"
       />
-      <HpQuickControls characterId={player.id} onChanged={onChanged} />
-      <Stat label="Classe d'armure" value={player.ac} />
-      <Stat label="Vitesse" value={`${player.speed} m`} />
+      <HpQuickControls characterId={character.id} onChanged={onChanged} />
+      <Stat label="Classe d'armure" value={character.ac} />
+      <Stat label="Vitesse" value={`${character.speed} m`} />
       {Object.keys(slots).length > 0 && (
         <div className="mt-4">
           <p className="mb-1 text-[10px] uppercase tracking-widest text-text-mute">Emplacements</p>
@@ -526,28 +537,34 @@ function HpQuickControls({
   };
   return (
     <div className="-mt-1 mb-3 flex items-center gap-1">
-      <input
-        type="number"
-        value={amount}
-        min={1}
-        onChange={(e) => setAmount(Math.max(1, Number(e.target.value)))}
-        className="w-12 rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-1 py-1 text-center font-mono text-[11px] text-text outline-none focus:border-gold"
-      />
+      <label className="flex items-center gap-1">
+        <span className="sr-only">Montant</span>
+        <input
+          type="number"
+          value={amount}
+          min={1}
+          onChange={(e) => setAmount(Math.max(1, Number(e.target.value)))}
+          title="Montant à appliquer"
+          className="w-12 rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-1 py-1 text-center font-mono text-[11px] text-text outline-none focus:border-gold"
+        />
+      </label>
       <button
         type="button"
         disabled={pending}
         onClick={() => run(-amount)}
+        title={`Retirer ${amount} PV`}
         className="flex-1 border border-line bg-transparent py-1 font-ui text-[10px] uppercase tracking-widest text-text-mute transition-colors hover:border-blood hover:text-blood disabled:opacity-50"
       >
-        − Dégâts
+        − {amount} PV
       </button>
       <button
         type="button"
         disabled={pending}
         onClick={() => run(amount)}
+        title={`Soigner de ${amount} PV`}
         className="flex-1 border border-line bg-transparent py-1 font-ui text-[10px] uppercase tracking-widest text-text-mute transition-colors hover:border-moss hover:text-moss disabled:opacity-50"
       >
-        + Soin
+        + {amount} PV
       </button>
     </div>
   );
