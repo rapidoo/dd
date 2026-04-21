@@ -2,7 +2,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow, MessageRow } from '../db/types';
-import { type EntityKind, recallEntities, upsertEntity } from '../neo4j/queries';
+import { type EntityKind, listEntities, recallEntities, upsertEntity } from '../neo4j/queries';
 import { parseDiceExpression, rollD20, rollExpression } from '../rules/dice';
 import { CONDITION_TYPES, type ConditionType } from '../rules/types';
 import { weaponAttack } from '../rules/weapon-attack';
@@ -121,6 +121,8 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     (m) => m.author_kind === 'user' || m.author_kind === 'gm' || m.author_kind === 'character',
   );
   const { summary: rollingSummary, tail } = await compactHistory(input.sessionId, relevantHistory);
+  const campaignId = await campaignIdOfSession(input.sessionId).catch(() => null);
+  const knownEntities = campaignId ? await listEntities(campaignId).catch(() => []) : [];
 
   const messages: Anthropic.Messages.MessageParam[] = tail.map((m) => {
     if (m.author_kind === 'gm') {
@@ -141,6 +143,7 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     input.companions,
     input.worldSummary,
     rollingSummary,
+    knownEntities,
   );
 
   let safety = 0;
@@ -551,6 +554,7 @@ function buildSystemPrompt(
   companions: CharacterRow[],
   worldSummary?: string | null,
   rollingSummary?: string | null,
+  knownEntities?: Array<{ name: string; kind: string; short_description: string | null }>,
 ): string {
   const partyLines: string[] = [];
   if (player) {
@@ -585,9 +589,10 @@ function buildSystemPrompt(
   const rollingBlock = rollingSummary
     ? `\nJusqu'ici dans cette veillée (résumé, les faits sont canon) :\n${rollingSummary.trim()}\n`
     : '';
+  const memoryBlock = buildMemoryBlock(knownEntities ?? []);
 
   return `${GM_SYSTEM_PROMPT}
-${worldBlock}${rollingBlock}
+${worldBlock}${rollingBlock}${memoryBlock}
 Équipe actuelle :
 ${partyLines.join('\n')}
 
@@ -743,6 +748,27 @@ const ROLL_DELEGATION_PATTERNS: RegExp[] = [
   /\bsauvegarde\s+de\s+(for|dex|con|int|sag|cha)\b/i,
   /(^|\s)(à|a)\s+toi\s+de\s+(lancer|jeter)\b/i,
 ];
+
+const ENTITY_KIND_LABEL: Record<string, string> = {
+  npc: 'PNJ',
+  location: 'Lieu',
+  faction: 'Faction',
+  item: 'Objet',
+  quest: 'Quête',
+  event: 'Événement',
+};
+
+function buildMemoryBlock(
+  entities: Array<{ name: string; kind: string; short_description: string | null }>,
+): string {
+  if (entities.length === 0) return '';
+  const lines = entities.slice(0, 10).map((e) => {
+    const kindLabel = ENTITY_KIND_LABEL[e.kind] ?? e.kind;
+    const desc = e.short_description ? ` — ${e.short_description}` : '';
+    return `  · [${kindLabel}] ${e.name}${desc}`;
+  });
+  return `\nMémoire de campagne (entités déjà rencontrées, reste cohérent avec leurs traits) :\n${lines.join('\n')}\n`;
+}
 
 function describeWeapons(character: CharacterRow): string[] {
   const items = (character.inventory as InventoryItem[] | null) ?? [];

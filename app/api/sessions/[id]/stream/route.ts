@@ -1,4 +1,5 @@
 import { isDebugCommand, runDebugCommand } from '../../../../../lib/ai/debug-mode';
+import { extractAndUpsertEntities } from '../../../../../lib/ai/entity-extraction';
 import { runGmTurn } from '../../../../../lib/ai/gm-agent';
 import { createSupabaseServerClient } from '../../../../../lib/db/server';
 import type { CharacterRow, MessageRow } from '../../../../../lib/db/types';
@@ -128,6 +129,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
               await supabase
                 .from('messages')
                 .insert({ session_id: sessionId, author_kind: 'gm', content });
+              // Fire-and-forget: let Haiku enrich the campaign graph in the
+              // background. Never blocks the stream or propagates errors.
+              void extractAndUpsertEntities(session.campaign_id, content);
             }
             write('done', { length: content.length });
           }
