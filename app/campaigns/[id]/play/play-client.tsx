@@ -188,6 +188,10 @@ export function PlayClient({
               targetAC?: number;
             };
             setMessages((m) => [...m, diceMsg(roll)]);
+          } else if (ev.event === 'combat') {
+            // Mid-stream state change (damage / heal / condition / start / end).
+            // Refresh party panel right away so HP bars move in real time.
+            void refreshParty();
           } else if (ev.event === 'error') {
             const errText = (ev.data as { message: string }).message;
             setMessages((m) => appendToMsg(m, gmId, `\n⚠ ${errText}`));

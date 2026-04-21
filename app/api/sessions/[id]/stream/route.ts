@@ -118,6 +118,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
               name: ev.characterName,
               content: ev.content,
             });
+          } else if (ev.type === 'combat_started') {
+            write('combat', { phase: 'started', combatId: ev.combatId });
+          } else if (ev.type === 'combat_ended') {
+            write('combat', { phase: 'ended' });
+          } else if (ev.type === 'combat_update') {
+            // Signal the client to re-fetch party state (HP, conditions,
+            // inventory) mid-stream — damage / healing / conditions just
+            // changed a character row.
+            write('combat', { phase: 'update' });
           } else if (ev.type === 'error') {
             write('error', { message: ev.message });
           } else if (ev.type === 'done') {
