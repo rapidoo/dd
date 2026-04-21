@@ -96,12 +96,20 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
   },
   {
     name: 'apply_damage',
-    description: 'Applique des dégâts ou des soins à un combattant (combatant_id).',
+    description:
+      "À APPELER IMMÉDIATEMENT dès qu'un PJ ou compagnon subit des dégâts ou est soigné, même en dehors d'un combat formel. Ne narre JAMAIS les PV dans le texte — cet outil met à jour le panneau joueur directement depuis la base. Ex: un bandit tire une flèche qui touche pour 5 → apply_damage(combatant_id=<uuid du PJ>, amount=5). Potion de soin +8 → amount=-8.",
     input_schema: {
       type: 'object',
       properties: {
-        combatant_id: { type: 'string' },
-        amount: { type: 'number', description: 'positif = dégâts, négatif = soins' },
+        combatant_id: {
+          type: 'string',
+          description:
+            "UUID du personnage (affiché dans la section 'Équipe actuelle' du prompt). Pas le nom.",
+        },
+        amount: {
+          type: 'number',
+          description: 'Positif = dégâts (ex: 5), négatif = soins (ex: -8). Pas de zéro.',
+        },
       },
       required: ['combatant_id', 'amount'],
     },

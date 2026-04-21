@@ -8,6 +8,7 @@ import { SessionSidebar } from '../../../../components/session/sidebar';
 import { BtnPrimary } from '../../../../components/ui/button';
 import { SlotRow, Stat } from '../../../../components/ui/stat';
 import type { CharacterRow, MessageRow } from '../../../../lib/db/types';
+import { adjustHP } from '../../../../lib/server/character-actions';
 import { promptCompanion } from '../../../../lib/server/companion-actions';
 import { getParty } from '../../../../lib/server/party';
 import { postUserMessage } from '../../../../lib/server/sessions';
@@ -303,6 +304,7 @@ export function PlayClient({
               campaignId={campaignId}
               player={player}
               companions={companions}
+              onRefresh={refreshParty}
               onPromptCompanion={(characterId) => {
                 const comp = companions.find((c) => c.id === characterId);
                 if (!comp) return;
@@ -392,11 +394,13 @@ function PlayerPanel({
   player,
   companions,
   onPromptCompanion,
+  onRefresh,
 }: {
   campaignId: string;
   player: CharacterRow | null;
   companions: CharacterRow[];
   onPromptCompanion: (characterId: string) => void;
+  onRefresh: () => void;
 }) {
   const party: Array<{ row: CharacterRow; isMj: false; color: string; glyph: string }> = [];
   if (player) party.push({ row: player, isMj: false, color: 'var(--color-gold)', glyph: '⚜' });
@@ -469,12 +473,12 @@ function PlayerPanel({
         </ul>
       </section>
 
-      {player && <PlayerStats player={player} />}
+      {player && <PlayerStats player={player} onChanged={onRefresh} />}
     </aside>
   );
 }
 
-function PlayerStats({ player }: { player: CharacterRow }) {
+function PlayerStats({ player, onChanged }: { player: CharacterRow; onChanged: () => void }) {
   const pct = Math.round((player.current_hp / Math.max(1, player.max_hp)) * 100);
   const slots = player.spell_slots ?? {};
   return (
@@ -488,6 +492,7 @@ function PlayerStats({ player }: { player: CharacterRow }) {
         pct={pct}
         barColor="linear-gradient(90deg, #5a1810, #9a3028)"
       />
+      <HpQuickControls characterId={player.id} onChanged={onChanged} />
       <Stat label="Classe d'armure" value={player.ac} />
       <Stat label="Vitesse" value={`${player.speed} m`} />
       {Object.keys(slots).length > 0 && (
@@ -501,6 +506,50 @@ function PlayerStats({ player }: { player: CharacterRow }) {
         </div>
       )}
     </section>
+  );
+}
+
+function HpQuickControls({
+  characterId,
+  onChanged,
+}: {
+  characterId: string;
+  onChanged: () => void;
+}) {
+  const [amount, setAmount] = useState(5);
+  const [pending, startTransition] = useTransition();
+  const run = (delta: number) => {
+    startTransition(async () => {
+      await adjustHP({ characterId, delta });
+      onChanged();
+    });
+  };
+  return (
+    <div className="-mt-1 mb-3 flex items-center gap-1">
+      <input
+        type="number"
+        value={amount}
+        min={1}
+        onChange={(e) => setAmount(Math.max(1, Number(e.target.value)))}
+        className="w-12 rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-1 py-1 text-center font-mono text-[11px] text-text outline-none focus:border-gold"
+      />
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => run(-amount)}
+        className="flex-1 border border-line bg-transparent py-1 font-ui text-[10px] uppercase tracking-widest text-text-mute transition-colors hover:border-blood hover:text-blood disabled:opacity-50"
+      >
+        − Dégâts
+      </button>
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => run(amount)}
+        className="flex-1 border border-line bg-transparent py-1 font-ui text-[10px] uppercase tracking-widest text-text-mute transition-colors hover:border-moss hover:text-moss disabled:opacity-50"
+      >
+        + Soin
+      </button>
+    </div>
   );
 }
 
