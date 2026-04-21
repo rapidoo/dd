@@ -269,7 +269,9 @@ export function PlayClient({
             </div>
           </div>
 
-          {player && <PlayerPanel player={player} />}
+          {(player || companions.length > 0) && (
+            <PlayerPanel player={player} companions={companions} />
+          )}
         </div>
       </div>
 
@@ -278,11 +280,71 @@ export function PlayClient({
   );
 }
 
-function PlayerPanel({ player }: { player: CharacterRow }) {
+const COMPANION_COLORS = ['#c47a3a', '#a86a9a', '#4a6a8a', '#6a7a3a', '#6a5a8a'];
+const COMPANION_GLYPHS = ['⚔', '♪', '❋', '✦', '◈'];
+
+function PlayerPanel({
+  player,
+  companions,
+}: {
+  player: CharacterRow | null;
+  companions: CharacterRow[];
+}) {
+  const party: Array<{ row: CharacterRow; isMj: false; color: string; glyph: string }> = [];
+  if (player) party.push({ row: player, isMj: false, color: 'var(--color-gold)', glyph: '⚜' });
+  companions.forEach((c, i) => {
+    party.push({
+      row: c,
+      isMj: false,
+      color: COMPANION_COLORS[i % COMPANION_COLORS.length] ?? '#c47a3a',
+      glyph: COMPANION_GLYPHS[i % COMPANION_GLYPHS.length] ?? '◉',
+    });
+  });
+
+  return (
+    <aside className="flex w-[300px] shrink-0 flex-col overflow-auto border-l border-line bg-[rgba(0,0,0,0.3)]">
+      <section className="border-b border-line px-5 py-5">
+        <p className="mb-3 font-display text-[10px] uppercase tracking-[0.3em] text-gold">
+          ✧ Autour du feu
+        </p>
+        <ul className="space-y-0">
+          {party.map((m) => (
+            <li
+              key={m.row.id}
+              className="flex items-center gap-3 border-b border-line py-2 last:border-b-0"
+            >
+              <span
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-display text-sm text-bg-deep"
+                style={{
+                  background: `radial-gradient(circle, ${m.color}, ${m.color}88)`,
+                  border: `1.5px solid ${m.color}`,
+                }}
+                aria-hidden
+              >
+                {m.glyph}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-display text-[13px] text-text">{m.row.name}</p>
+                <p className="truncate text-[10px] text-text-mute">{roleLabel(m.row)}</p>
+              </div>
+              <span className="font-ui text-[9px] uppercase tracking-widest text-moss">
+                ● {statusLabel(m.row)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {player && <PlayerStats player={player} />}
+    </aside>
+  );
+}
+
+function PlayerStats({ player }: { player: CharacterRow }) {
   const pct = Math.round((player.current_hp / Math.max(1, player.max_hp)) * 100);
   const slots = player.spell_slots ?? {};
   return (
-    <aside className="w-[300px] shrink-0 overflow-auto border-l border-line bg-[rgba(0,0,0,0.3)] px-5 py-5">
+    <section className="px-5 py-5">
       <p className="mb-3 font-display text-[10px] uppercase tracking-[0.3em] text-gold">
         ✧ {player.name}
       </p>
@@ -304,8 +366,19 @@ function PlayerPanel({ player }: { player: CharacterRow }) {
             ))}
         </div>
       )}
-    </aside>
+    </section>
   );
+}
+
+function roleLabel(c: CharacterRow): string {
+  const klass = c.class.charAt(0).toUpperCase() + c.class.slice(1);
+  return c.is_ai ? `${klass} · Allié` : `${klass} ${c.level}`;
+}
+
+function statusLabel(c: CharacterRow): string {
+  if (c.current_hp <= 0) return 'À TERRE';
+  if (c.current_hp < c.max_hp / 2) return 'BLESSÉ';
+  return 'PRÊT';
 }
 
 /**
