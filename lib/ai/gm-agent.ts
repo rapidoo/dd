@@ -101,15 +101,22 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
       })
     : [];
 
+  // Per-message cap: DB allows 16 KB but shipping six full-size blocks plus
+  // a 16 KB world summary on every turn ≈ 32 k tokens → ~0,50 $ / turn Opus.
+  // Clipping to ~2 k chars per tail entry keeps typical turns well under
+  // 8 k input tokens without losing recent context (rolling summary covers
+  // everything older anyway).
+  const MAX_TAIL_CHARS = 2000;
   const messages: ChatMessage[] = tail.map((m) => {
+    const content = clipText(m.content, MAX_TAIL_CHARS);
     if (m.author_kind === 'gm') {
-      return { role: 'assistant' as const, content: m.content };
+      return { role: 'assistant' as const, content };
     }
     if (m.author_kind === 'character') {
       const name = (m.author_id && companionNameById.get(m.author_id)) || 'Compagnon';
-      return { role: 'user' as const, content: `(${name} dit) ${m.content}` };
+      return { role: 'user' as const, content: `(${name} dit) ${content}` };
     }
-    return { role: 'user' as const, content: m.content };
+    return { role: 'user' as const, content };
   });
   if (input.userMessage && input.userMessage.trim().length > 0) {
     messages.push({ role: 'user', content: input.userMessage });
@@ -122,6 +129,11 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     rollingSummary,
     knownEntities,
   );
+
+  if (process.env.NODE_ENV !== 'production') {
+    const inputChars = systemPrompt.length + messages.reduce((n, m) => n + contentLength(m), 0);
+    console.debug(`[gm] input ≈ ${Math.round(inputChars / 4)} tokens (${inputChars} chars)`);
+  }
 
   // Two independent safety counters: reprompt retries (roll-delegation
   // safeguard) shouldn't steal budget from real tool iterations. When either
@@ -562,7 +574,12 @@ function buildSystemPrompt(
     );
   }
 
-  const worldBlock = worldSummary ? `\nCampagne en cours :\n${worldSummary.trim()}\n` : '';
+  // Cap worldSummary server-side at ~3000 chars — Postgres allows 16 KB but
+  // shipping that every turn is wasteful. Rolling summary stays as-is (Haiku
+  // already targets 80-120 words = ~600 chars).
+  const worldBlock = worldSummary
+    ? `\nCampagne en cours :\n${clipText(worldSummary.trim(), 3000)}\n`
+    : '';
   const rollingBlock = rollingSummary
     ? `\nJusqu'ici dans cette veillée (résumé, les faits sont canon) :\n${rollingSummary.trim()}\n`
     : '';
@@ -758,6 +775,20 @@ function describeWeapons(character: CharacterRow): string[] {
     result.push(`${w.name} (att ${attack.toHit} · dmg ${attack.damage}${type})`);
   }
   return result;
+}
+
+/** Truncate text to `max` chars, preserving a trailing ellipsis hint. */
+function clipText(text: string, max: number): string {
+  if (!text || text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
+}
+
+/** Best-effort char count of a ChatMessage for budget tracing. */
+function contentLength(msg: ChatMessage): number {
+  if (msg.role === 'tool') {
+    return msg.results.reduce((n, r) => n + (r.content?.length ?? 0), 0);
+  }
+  return msg.content.length;
 }
 
 export function hasRollDelegation(text: string): boolean {
