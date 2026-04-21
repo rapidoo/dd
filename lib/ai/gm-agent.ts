@@ -41,6 +41,10 @@ Gestion des PV et des états — RÈGLE ABSOLUE :
 - Ces outils fonctionnent même hors combat formel — ils mettent le personnage à jour directement.
 - Réserve start_combat pour de vraies rencontres qui demandent un ordre d'initiative strict.
 
+Magie et repos :
+- Quand un PJ ou compagnon lance un SORT qui coûte un emplacement (pas les cantrips niv. 0) : appelle cast_spell(character_id, spell_level, spell_name). Si l'outil renvoie "Aucun emplacement disponible", fais échouer le sort dans la fiction.
+- Quand la fiction décrit un bivouac, une veille, une nuit de sommeil : appelle trigger_rest(character_id, kind). Repos court (1h, petite pause) = "short" → regagne 1d[DV]+CON. Repos long (8h, nuit complète) = "long" → PV max, tous les emplacements restaurés, exhaustion -1.
+
 Format des réponses :
 - Narration courte (3-6 phrases maximum par message)
 - Pas de markdown (ni **gras**, ni listes, ni titres ##)
@@ -238,6 +242,17 @@ const promptCompanionSchema = z.object({
   hint: z.string().trim().max(400).optional(),
 });
 
+const castSpellSchema = z.object({
+  character_id: characterIdSchema,
+  spell_level: z.number().int().min(1).max(9),
+  spell_name: z.string().trim().max(80).optional(),
+});
+
+const triggerRestSchema = z.object({
+  character_id: characterIdSchema,
+  kind: z.enum(['short', 'long']),
+});
+
 /**
  * Parse an LLM-provided tool input with Zod. Returns the parsed value or an
  * error payload that can be fed back to the LLM without crashing the turn.
@@ -347,6 +362,22 @@ async function executeTool(
         return { result: { error: 'Cible hors campagne' }, events: [] };
       }
       return await adjustCharacterCurrency(input);
+    }
+    case 'cast_spell': {
+      const p = parseToolInput(castSpellSchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      if (!(await characterInSession(sessionId, p.data.character_id))) {
+        return { result: { error: 'Cible hors campagne' }, events: [] };
+      }
+      return await castSpellOnCharacter(p.data.character_id, p.data.spell_level);
+    }
+    case 'trigger_rest': {
+      const p = parseToolInput(triggerRestSchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      if (!(await characterInSession(sessionId, p.data.character_id))) {
+        return { result: { error: 'Cible hors campagne' }, events: [] };
+      }
+      return await triggerRestOnCharacter(p.data.character_id, p.data.kind);
     }
     case 'prompt_companion': {
       const p = parseToolInput(promptCompanionSchema, block.input);
@@ -784,6 +815,117 @@ async function adjustCharacterCurrency(input: {
   await supabase.from('characters').update({ currency: next }).eq('id', input.character_id);
   return {
     result: { ok: true, currency: next },
+    events: [{ type: 'combat_update' }],
+  };
+}
+
+// --- Spell slot consumption + rest --------------------------------------
+
+async function castSpellOnCharacter(
+  characterId: string,
+  spellLevel: number,
+): Promise<{ result: unknown; events: GmEvent[] }> {
+  const supabase = createSupabaseServiceClient();
+  const { data: character } = await supabase
+    .from('characters')
+    .select('id, spell_slots')
+    .eq('id', characterId)
+    .maybeSingle();
+  if (!character) return { result: { error: 'Personnage introuvable' }, events: [] };
+  const slots = (character.spell_slots ?? {}) as Record<string, { max: number; used: number }>;
+  const slot = slots[String(spellLevel)];
+  if (!slot || slot.used >= slot.max) {
+    return {
+      result: {
+        ok: false,
+        error: `Aucun emplacement de niveau ${spellLevel} disponible. Le sort ne peut pas être lancé.`,
+      },
+      events: [],
+    };
+  }
+  const next = { ...slots, [spellLevel]: { ...slot, used: slot.used + 1 } };
+  await supabase.from('characters').update({ spell_slots: next }).eq('id', characterId);
+  return {
+    result: {
+      ok: true,
+      spell_level: spellLevel,
+      remaining: slot.max - (slot.used + 1),
+      out_of: slot.max,
+    },
+    events: [{ type: 'combat_update' }],
+  };
+}
+
+async function triggerRestOnCharacter(
+  characterId: string,
+  kind: 'short' | 'long',
+): Promise<{ result: unknown; events: GmEvent[] }> {
+  const supabase = createSupabaseServiceClient();
+  const { data: character } = await supabase
+    .from('characters')
+    .select('id, con, current_hp, max_hp, spell_slots, exhaustion, class')
+    .eq('id', characterId)
+    .maybeSingle();
+  if (!character) return { result: { error: 'Personnage introuvable' }, events: [] };
+
+  if (kind === 'long') {
+    const slots = (character.spell_slots ?? {}) as Record<string, { max: number; used: number }>;
+    const restoredSlots: Record<string, { max: number; used: number }> = {};
+    for (const [lvl, s] of Object.entries(slots)) {
+      restoredSlots[lvl] = { max: s.max, used: 0 };
+    }
+    const nextExhaustion = Math.max(0, character.exhaustion - 1);
+    await supabase
+      .from('characters')
+      .update({
+        current_hp: character.max_hp,
+        spell_slots: restoredSlots,
+        exhaustion: nextExhaustion,
+      })
+      .eq('id', characterId);
+    return {
+      result: {
+        ok: true,
+        kind: 'long',
+        current_hp: character.max_hp,
+        exhaustion: nextExhaustion,
+        slots_restored: true,
+      },
+      events: [{ type: 'combat_update' }],
+    };
+  }
+
+  // Short rest: regain 1 hit die. Class → hit die faces.
+  const classFaces: Record<string, number> = {
+    barbarian: 12,
+    bard: 8,
+    cleric: 8,
+    druid: 8,
+    fighter: 10,
+    monk: 8,
+    paladin: 10,
+    ranger: 10,
+    rogue: 8,
+    sorcerer: 6,
+    warlock: 8,
+    wizard: 6,
+  };
+  const faces = classFaces[character.class] ?? 8;
+  const roll = 1 + Math.floor(Math.random() * faces);
+  const conMod = Math.floor((character.con - 10) / 2);
+  const gained = Math.max(1, roll + conMod);
+  const newHP = Math.min(character.max_hp, character.current_hp + gained);
+  await supabase.from('characters').update({ current_hp: newHP }).eq('id', characterId);
+  return {
+    result: {
+      ok: true,
+      kind: 'short',
+      hit_die_rolled: `d${faces}`,
+      roll,
+      con_mod: conMod,
+      hp_gained: gained,
+      current_hp: newHP,
+    },
     events: [{ type: 'combat_update' }],
   };
 }

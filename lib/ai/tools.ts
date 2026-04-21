@@ -204,6 +204,47 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: 'cast_spell',
+    description:
+      "Consomme un emplacement de sort du niveau demandé sur le personnage. À appeler dès qu'un PJ ou compagnon lance un sort qui coûte un emplacement (les cantrips/tours de magie ne coûtent rien : n'appelle pas l'outil pour eux). Retourne une erreur si l'emplacement est épuisé — auquel cas, nie le lancement dans la narration.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        character_id: {
+          type: 'string',
+          description: 'UUID du personnage qui lance le sort.',
+        },
+        spell_level: {
+          type: 'number',
+          description:
+            "Niveau de l'emplacement consommé (1-9). Pour un sort lancé en sur-niveau, mets le niveau effectif.",
+        },
+        spell_name: {
+          type: 'string',
+          description: 'Nom du sort, pour contexte (ex. "Éclair", "Soins").',
+        },
+      },
+      required: ['character_id', 'spell_level'],
+    },
+  },
+  {
+    name: 'trigger_rest',
+    description:
+      'Déclenche un repos court (1h) ou long (8h). Repos long : PV max, tous les emplacements restaurés, exhaustion -1. Repos court : regagne 1d[DV]+modCON par dé de vie dépensé (1 ici). À utiliser quand la fiction décrit un bivouac ou une pause.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        character_id: { type: 'string', description: 'UUID du personnage.' },
+        kind: {
+          type: 'string',
+          enum: ['short', 'long'],
+          description: 'short = repos court (1h), long = repos long (8h).',
+        },
+      },
+      required: ['character_id', 'kind'],
+    },
+  },
+  {
     name: 'prompt_companion',
     description:
       "Donne la parole à l'un des compagnons IA. Choisis quel compagnon réagit à la situation actuelle selon sa personnalité.",
