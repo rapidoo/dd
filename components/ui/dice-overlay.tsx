@@ -19,6 +19,9 @@ export interface DiceOverlayState {
   total: number;
   critical: boolean;
   fumble: boolean;
+  dc?: number;
+  targetAC?: number;
+  outcome?: string | null;
 }
 
 const SHAPES: Record<DiceFaces, { clip: string; rounded: boolean }> = {
@@ -114,9 +117,6 @@ function Die({ faces, value, rolling, critical, fumble }: DieProps) {
       >
         {display}
       </span>
-      <span className="absolute -bottom-4 left-1/2 -translate-x-1/2 font-mono text-[9px] tracking-widest text-text-mute">
-        d{faces}
-      </span>
     </div>
   );
 }
@@ -129,28 +129,53 @@ interface OverlayProps {
 
 export function DiceOverlay({ state, rolling, onDismiss }: OverlayProps) {
   if (!state) return null;
-  const { dice, modifier, label, kind, keptD20, total, critical, fumble, advantage, allD20 } =
-    state;
+  const {
+    dice,
+    modifier,
+    label,
+    kind,
+    keptD20,
+    total,
+    critical,
+    fumble,
+    advantage,
+    allD20,
+    dc,
+    targetAC,
+    outcome,
+  } = state;
 
   const kindLabel =
     kind === 'attack'
-      ? "⚔  JET D'ATTAQUE"
+      ? "JET D'ATTAQUE"
       : kind === 'save'
-        ? '◈  SAUVEGARDE'
+        ? 'SAUVEGARDE'
         : kind === 'damage'
-          ? '✦  DÉGÂTS'
+          ? 'DÉGÂTS'
           : kind === 'initiative'
-            ? '⚡  INITIATIVE'
+            ? 'INITIATIVE'
             : kind === 'concentration'
-              ? '❋  CONCENTRATION'
-              : '⚶  TEST DE CARAC.';
+              ? 'CONCENTRATION'
+              : 'TEST DE CARACTÉRISTIQUE';
 
   const advLabel =
-    advantage === 'advantage'
-      ? '  ·  AVANTAGE'
-      : advantage === 'disadvantage'
-        ? '  ·  DÉSAVANTAGE'
-        : '';
+    advantage === 'advantage' ? 'Avantage' : advantage === 'disadvantage' ? 'Désavantage' : null;
+
+  // The "raw" value that gets the modifier added to it
+  const rawD20 = keptD20 !== undefined ? keptD20 : null;
+  const rawSum =
+    rawD20 !== null ? rawD20 : dice.filter((d) => d.faces !== 20).reduce((a, d) => a + d.value, 0);
+
+  const outcomeBanner =
+    outcome === 'hit'
+      ? { text: 'TOUCHÉ', color: 'var(--color-gold-bright)' }
+      : outcome === 'miss'
+        ? { text: 'MANQUÉ', color: 'var(--color-text-mute)' }
+        : outcome === 'success'
+          ? { text: 'RÉUSSI', color: 'var(--color-gold-bright)' }
+          : outcome === 'failure'
+            ? { text: 'ÉCHOUÉ', color: 'var(--color-text-mute)' }
+            : null;
 
   return (
     <button
@@ -165,11 +190,21 @@ export function DiceOverlay({ state, rolling, onDismiss }: OverlayProps) {
         cursor: rolling ? 'wait' : 'pointer',
       }}
     >
-      <p className="mb-1 text-center font-display text-[12px] tracking-[0.35em] text-gold">
+      <p className="mb-1 text-center font-display text-[11px] tracking-[0.35em] text-gold">
         {kindLabel}
-        {advLabel}
       </p>
-      <p className="mb-8 text-center font-display text-2xl text-gold-bright">{label}</p>
+      <p className="text-center font-display text-[28px] text-gold-bright">{label}</p>
+      {(advLabel || dc !== undefined || targetAC !== undefined) && (
+        <p className="mt-1 mb-8 text-center font-ui text-[11px] uppercase tracking-widest text-text-mute">
+          {advLabel && <span>{advLabel}</span>}
+          {advLabel && (dc !== undefined || targetAC !== undefined) && (
+            <span className="mx-2">·</span>
+          )}
+          {dc !== undefined && <span>DD {dc}</span>}
+          {targetAC !== undefined && <span>CA {targetAC}</span>}
+        </p>
+      )}
+      {!advLabel && dc === undefined && targetAC === undefined && <div className="mb-8" />}
 
       <div className="mb-10 flex max-w-xl flex-wrap items-center justify-center gap-6">
         {dice.map((d, i) => {
@@ -209,16 +244,16 @@ export function DiceOverlay({ state, rolling, onDismiss }: OverlayProps) {
 
       {!rolling && (
         <div className="text-center" style={{ animation: 'fadeInUp 500ms' }}>
-          <p className="font-ui text-[12px] tracking-widest text-text-mute">
-            {keptD20 !== undefined && kind !== 'damage'
-              ? keptD20
-              : dice.filter((d) => d.faces !== 20).reduce((a, d) => a + d.value, 0)}
-            {modifier !== 0 && ` ${modifier >= 0 ? '+' : '−'} ${Math.abs(modifier)}`}
-          </p>
+          {modifier !== 0 && (
+            <p className="font-mono text-[13px] tracking-wider text-text-mute">
+              {rawSum} <span className="text-text-faint">{modifier >= 0 ? '+' : '−'}</span>{' '}
+              {Math.abs(modifier)}
+            </p>
+          )}
           <p
-            className="mt-1 font-display leading-none"
+            className="font-display leading-none"
             style={{
-              fontSize: 84,
+              fontSize: 96,
               color: critical
                 ? 'var(--color-candle-glow)'
                 : fumble
@@ -243,7 +278,15 @@ export function DiceOverlay({ state, rolling, onDismiss }: OverlayProps) {
               ✦ ÉCHEC CRITIQUE ✦
             </p>
           )}
-          <p className="mt-6 font-ui text-[11px] tracking-widest text-text-mute">
+          {!critical && !fumble && outcomeBanner && (
+            <p
+              className="mt-2 font-display text-[14px] tracking-[0.3em]"
+              style={{ color: outcomeBanner.color }}
+            >
+              {outcomeBanner.text}
+            </p>
+          )}
+          <p className="mt-8 font-ui text-[11px] tracking-widest text-text-faint">
             Clique ou appuie sur Échap pour fermer
           </p>
         </div>

@@ -61,12 +61,18 @@ export type GmEvent =
 export interface DiceRollRecord {
   id?: string;
   kind: string;
+  /** Human-readable label chosen by the GM, e.g. "Perception", "Sauvegarde SAG". */
+  label: string;
   expression: string;
   dice: number[];
   modifier: number;
   total: number;
   outcome: string | null;
   advantage: 'normal' | 'advantage' | 'disadvantage';
+  /** DC for saves/checks. */
+  dc?: number;
+  /** Target AC for attacks. */
+  targetAC?: number;
 }
 
 /**
@@ -410,12 +416,15 @@ async function executeRoll(
   const record: DiceRollRecord = {
     id: data?.id,
     kind: input.kind,
+    label: input.label,
     expression: input.dice,
     dice: roll.dice,
     modifier: roll.modifier,
     total: roll.total,
     outcome: roll.outcome,
     advantage,
+    ...(input.dc !== undefined ? { dc: input.dc } : {}),
+    ...(input.target_ac !== undefined ? { targetAC: input.target_ac } : {}),
   };
   return {
     result: {

@@ -148,9 +148,12 @@ export function PlayClient({
               modifier: number;
               total: number;
               kind: string;
+              label?: string;
               outcome: string | null;
               advantage: 'normal' | 'advantage' | 'disadvantage';
               expression: string;
+              dc?: number;
+              targetAC?: number;
             };
             showDice(roll);
           } else if (ev.event === 'error') {
@@ -177,9 +180,12 @@ export function PlayClient({
     modifier: number;
     total: number;
     kind: string;
+    label?: string;
     outcome: string | null;
     advantage: 'normal' | 'advantage' | 'disadvantage';
     expression: string;
+    dc?: number;
+    targetAC?: number;
   }) {
     const faces = inferFaces(roll.expression);
     const diceArray = roll.dice.map((value) => ({ faces, value }));
@@ -187,7 +193,7 @@ export function PlayClient({
     setDice({
       dice: diceArray,
       modifier: roll.modifier,
-      label: roll.kind.toUpperCase(),
+      label: roll.label?.trim() || defaultLabel(roll.kind),
       kind: normalizeKind(roll.kind),
       keptD20: primaryD20,
       allD20: faces === 20 ? roll.dice : undefined,
@@ -195,6 +201,9 @@ export function PlayClient({
       total: roll.total,
       critical: roll.outcome === 'crit',
       fumble: roll.outcome === 'fumble',
+      dc: roll.dc,
+      targetAC: roll.targetAC,
+      outcome: roll.outcome,
     });
     setRolling(true);
     setTimeout(() => setRolling(false), 1000);
@@ -524,6 +533,25 @@ function inferFaces(expr: string): 4 | 6 | 8 | 10 | 12 | 20 {
   const n = Number(match[1]);
   if (n === 4 || n === 6 || n === 8 || n === 10 || n === 12 || n === 20) return n;
   return 20;
+}
+
+function defaultLabel(kind: string): string {
+  switch (kind) {
+    case 'attack':
+      return 'Attaque';
+    case 'damage':
+      return 'Dégâts';
+    case 'save':
+      return 'Sauvegarde';
+    case 'check':
+      return 'Test';
+    case 'initiative':
+      return 'Initiative';
+    case 'concentration':
+      return 'Concentration';
+    default:
+      return kind;
+  }
 }
 
 function normalizeKind(
