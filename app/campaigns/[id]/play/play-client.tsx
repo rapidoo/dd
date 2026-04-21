@@ -211,7 +211,7 @@ export function PlayClient({
 
   return (
     <div className="relative flex h-screen">
-      <SessionSidebar current="session" />
+      <SessionSidebar campaignId={campaignId} current="session" />
       <div className="flex flex-1 flex-col overflow-hidden">
         <header className="flex items-center justify-between border-b border-line bg-gradient-to-br from-[rgba(212,166,76,0.1)] to-transparent px-8 py-4">
           <div className="flex items-center gap-4">

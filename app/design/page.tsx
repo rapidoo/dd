@@ -44,7 +44,7 @@ function buildDemoRoll(kind: RollKind, outcome: 'normal' | 'crit' | 'fumble'): D
 }
 
 export default function DesignPage() {
-  const [current, setCurrent] = useState('session');
+  const [current] = useState('session');
   const [overlay, setOverlay] = useState<DiceOverlayState | null>(null);
   const [rolling, setRolling] = useState(false);
 
@@ -56,7 +56,7 @@ export default function DesignPage() {
 
   return (
     <div className="relative flex min-h-screen">
-      <SessionSidebar current={current} onNavigate={setCurrent} />
+      <SessionSidebar campaignId="design" current={current} />
 
       <main className="flex-1 overflow-y-auto p-10">
         <h1 className="mb-2 font-display text-3xl text-gold-bright">Design system</h1>
