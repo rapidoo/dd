@@ -39,7 +39,7 @@ export async function respondAsCompanion(opts: {
     .filter(
       (m) => m.author_kind === 'user' || m.author_kind === 'gm' || m.author_kind === 'character',
     )
-    .slice(-12)
+    .slice(-6)
     .map((m) => ({
       role: m.author_kind === 'user' ? ('user' as const) : ('assistant' as const),
       content: m.content,
@@ -48,7 +48,7 @@ export async function respondAsCompanion(opts: {
 
   const response = await anthropic().messages.create({
     model: MODELS.COMPANION,
-    max_tokens: 400,
+    max_tokens: 250,
     system: COMPANION_SYSTEM(opts.character, opts.hint ?? null),
     messages,
   });

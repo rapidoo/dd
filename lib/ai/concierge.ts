@@ -120,7 +120,7 @@ async function extract(
   try {
     const response = await anthropic().messages.create({
       model: MODELS.UTIL,
-      max_tokens: 1200,
+      max_tokens: 800,
       messages: [
         {
           role: 'user',
@@ -166,7 +166,7 @@ Règles :
 - Si rien à persister, renvoie {"entities":[],"loot":[]}.
 
 Narration :
-${input.narration.slice(0, 6000)}
+${input.narration.slice(0, 3000)}
 
 JSON :`,
         },

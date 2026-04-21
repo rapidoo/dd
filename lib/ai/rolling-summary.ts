@@ -14,9 +14,9 @@ import { anthropic, MODELS } from './claude';
  * growing linearly with session length.
  */
 
-const KEEP_TAIL = 10;
-const REGEN_EVERY = 10;
-const MIN_HISTORY_FOR_SUMMARY = KEEP_TAIL + 5;
+const KEEP_TAIL = 6;
+const REGEN_EVERY = 8;
+const MIN_HISTORY_FOR_SUMMARY = KEEP_TAIL + 4;
 
 export interface CompactedHistory {
   /** Existing rolling summary if we have one, else null. */
@@ -83,16 +83,16 @@ async function haikuSummarize(
     .join('\n\n');
 
   const prompt = existingSummary
-    ? `Tu mets à jour le résumé d'une partie de Donjons & Dragons. Intègre les nouveaux échanges ci-dessous dans le résumé existant. Reste concis (150-200 mots max), en français, à la troisième personne, en conservant les faits importants : PNJ rencontrés (avec un trait), lieux visités, objets obtenus, engagements pris, fils narratifs en cours. Ne recopie pas du dialogue ni des dés, synthétise l'état du monde et des relations.
+    ? `Mets à jour ce résumé D&D en intégrant les nouveaux échanges. 80-120 mots MAX, français, 3e personne, faits seulement (PNJ+trait, lieux, objets, engagements, fils en cours). Pas de dialogue, pas de dés.
 
-Résumé existant :
+Résumé :
 ${existingSummary}
 
 Nouveaux échanges :
 ${asTranscript}
 
 Nouveau résumé :`
-    : `Tu résumes le début d'une partie de Donjons & Dragons. Produis un résumé de 150-200 mots max, en français, à la troisième personne, centré sur : PNJ rencontrés (avec un trait), lieux visités, objets obtenus, engagements pris, fils narratifs en cours. Pas de dialogue, pas de dés.
+    : `Résume ce début de partie D&D. 80-120 mots MAX, français, 3e personne, faits seulement (PNJ+trait, lieux, objets, engagements, fils en cours). Pas de dialogue, pas de dés.
 
 Échanges :
 ${asTranscript}
@@ -102,7 +102,7 @@ Résumé :`;
   try {
     const response = await anthropic().messages.create({
       model: MODELS.UTIL,
-      max_tokens: 400,
+      max_tokens: 250,
       messages: [{ role: 'user', content: prompt }],
     });
     const text = response.content

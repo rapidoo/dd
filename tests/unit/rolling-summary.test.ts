@@ -71,29 +71,29 @@ describe('compactHistory', () => {
   });
 
   it('returns history as-is under the threshold', async () => {
-    const h = history(10);
+    const h = history(8);
     const result = await compactHistory('s1', h);
     expect(result.summary).toBeNull();
-    expect(result.tail).toHaveLength(10);
+    expect(result.tail).toHaveLength(8);
     expect(haikuCalls).toBe(0);
   });
 
-  it('summarizes when history exceeds threshold, keeps last 10', async () => {
+  it('summarizes when history exceeds threshold, keeps last 6', async () => {
     const h = history(20);
     const result = await compactHistory('s1', h);
     expect(result.summary).toBe('résumé 1');
-    expect(result.tail).toHaveLength(10);
-    expect(result.tail[0]?.id).toBe('m11');
-    expect(result.tail[9]?.id).toBe('m20');
+    expect(result.tail).toHaveLength(6);
+    expect(result.tail[0]?.id).toBe('m15');
+    expect(result.tail[5]?.id).toBe('m20');
     expect(haikuCalls).toBe(1);
-    expect(state.lastUpdate?.summary_cursor).toBe('m10');
+    expect(state.lastUpdate?.summary_cursor).toBe('m14');
   });
 
   it('reuses existing summary when few new messages', async () => {
-    state.session = { summary: 'old', summary_cursor: 'm10' };
-    // Tail is m12-m21 (10), compactable is m1-m11 (11), newSinceSummary = 0
-    // cursorIdx=9 (m10 found), compactable.length=11, new=11-1-9=1 → reuse
-    const h = history(21);
+    // Tail (6) = m10-m15. Compactable = m1-m9. Cursor m8, cursorIdx=7.
+    // newSinceSummary = 9 - 1 - 7 = 1 → reuse.
+    state.session = { summary: 'old', summary_cursor: 'm8' };
+    const h = history(15);
     const result = await compactHistory('s1', h);
     expect(result.summary).toBe('old');
     expect(haikuCalls).toBe(0);
@@ -101,14 +101,14 @@ describe('compactHistory', () => {
   });
 
   it('regenerates summary when enough new messages fell past the tail', async () => {
+    // history=30, tail=m25-m30, compactable=m1-m24, cursor m5, idx=4
+    // newSinceSummary = 24 - 1 - 4 = 19 → regen
     state.session = { summary: 'old', summary_cursor: 'm5' };
-    // history=30, tail=m21-m30, compactable=m1-m20, cursor idx=4
-    // newSinceSummary = 20 - 1 - 4 = 15 → regen
     const h = history(30);
     const result = await compactHistory('s1', h);
     expect(result.summary).toBe('résumé 1');
     expect(haikuCalls).toBe(1);
-    expect(state.lastUpdate?.summary_cursor).toBe('m20');
+    expect(state.lastUpdate?.summary_cursor).toBe('m24');
   });
 
   it('falls back to existing summary if Haiku fails', async () => {
