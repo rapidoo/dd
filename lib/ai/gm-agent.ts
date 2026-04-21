@@ -150,10 +150,31 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
       return;
     }
 
-    for (const block of response.content) {
-      if (block.type === 'text') {
-        yield { type: 'text_delta', delta: block.text };
-      }
+    // Safeguard: if the GM wrote a roll-delegation phrase ("Fais un jet…")
+    // without calling request_roll in the same turn, we swallow that text and
+    // re-prompt instead of streaming the bad narration to the player.
+    const textBlocks = response.content.filter((b) => b.type === 'text');
+    const fullText = textBlocks.map((b) => (b as Anthropic.Messages.TextBlock).text).join('');
+    const calledRequestRoll = response.content.some(
+      (b) => b.type === 'tool_use' && b.name === 'request_roll',
+    );
+    const delegated = hasRollDelegation(fullText);
+
+    if (delegated && !calledRequestRoll) {
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: '(tour rejeté : jet délégué au joueur)' }],
+      });
+      messages.push({
+        role: 'user',
+        content:
+          'Tu viens d\'écrire une formule qui délègue un jet au joueur (ex: "Fais un jet", "Lance un dé", "Jette les dés"). C\'est interdit. Annule cette narration et appelle request_roll MAINTENANT, puis reprends la suite en fonction du résultat.',
+      });
+      continue;
+    }
+
+    for (const block of textBlocks) {
+      yield { type: 'text_delta', delta: (block as Anthropic.Messages.TextBlock).text };
     }
 
     if (response.stop_reason !== 'tool_use') {
@@ -679,6 +700,27 @@ function mapRollKind(
   kind: RequestRollInput['kind'],
 ): 'attack' | 'damage' | 'save' | 'check' | 'initiative' | 'concentration' {
   return kind;
+}
+
+/**
+ * Detects phrasings that try to make the player roll instead of calling
+ * request_roll. Matches common French variants; called on every Opus turn so
+ * we can swallow that text and re-prompt.
+ */
+const ROLL_DELEGATION_PATTERNS: RegExp[] = [
+  /\bfais(?:-moi|[- ]le)?\b[^.!?\n]*\bjet\b/i,
+  /\bfaire\b[^.!?\n]*\bjet\b/i,
+  /\blance(?:-moi|r|s)?\b[^.!?\n]*(\bd\d+\b|\bdé[s]?\b|\bdés\b)/i,
+  /\bjette(?:-moi|r|s)?\b[^.!?\n]*(\bd\d+\b|\bdés?\b)/i,
+  /\broule(?:-moi|r|s)?\b[^.!?\n]*(\bdégâts?\b|\bd\d+\b|\bdés?\b)/i,
+  /\bjet\s+de\s+(force|dextérité|dexterite|constitution|intelligence|sagesse|charisme|perception|investigation|discrétion|discretion|persuasion|tromperie|intimidation|athlétisme|athletisme|acrobatie|arcanes|religion|nature|survie|médecine|medecine|représentation|representation)\b/i,
+  /\bsauvegarde\s+de\s+(for|dex|con|int|sag|cha)\b/i,
+  /(^|\s)(à|a)\s+toi\s+de\s+(lancer|jeter)\b/i,
+];
+
+export function hasRollDelegation(text: string): boolean {
+  if (!text || text.length < 5) return false;
+  return ROLL_DELEGATION_PATTERNS.some((re) => re.test(text));
 }
 
 async function applyDamageToCharacter(
