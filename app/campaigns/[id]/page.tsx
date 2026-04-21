@@ -45,6 +45,9 @@ export default async function CampaignPage({ params }: { params: Promise<Params>
           <Link href={`/campaigns/${campaign.id}/team`}>
             <BtnPrimary icon="◉">Équipe</BtnPrimary>
           </Link>
+          <Link href={`/campaigns/${campaign.id}/sheet`}>
+            <BtnPrimary icon="⚜">Fiche</BtnPrimary>
+          </Link>
         </div>
       </section>
     </main>
