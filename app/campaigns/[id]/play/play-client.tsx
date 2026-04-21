@@ -8,7 +8,6 @@ import { SessionSidebar } from '../../../../components/session/sidebar';
 import { BtnPrimary } from '../../../../components/ui/button';
 import { SlotRow, Stat } from '../../../../components/ui/stat';
 import type { CharacterRow, MessageRow } from '../../../../lib/db/types';
-import { adjustHP } from '../../../../lib/server/character-actions';
 import { promptCompanion } from '../../../../lib/server/companion-actions';
 import { getParty } from '../../../../lib/server/party';
 import { postUserMessage } from '../../../../lib/server/sessions';
@@ -304,7 +303,6 @@ export function PlayClient({
               campaignId={campaignId}
               player={player}
               companions={companions}
-              onRefresh={refreshParty}
               onPromptCompanion={(characterId) => {
                 const comp = companions.find((c) => c.id === characterId);
                 if (!comp) return;
@@ -394,13 +392,11 @@ function PlayerPanel({
   player,
   companions,
   onPromptCompanion,
-  onRefresh,
 }: {
   campaignId: string;
   player: CharacterRow | null;
   companions: CharacterRow[];
   onPromptCompanion: (characterId: string) => void;
-  onRefresh: () => void;
 }) {
   const party: Array<{ row: CharacterRow; isMj: false; color: string; glyph: string }> = [];
   if (player) party.push({ row: player, isMj: false, color: 'var(--color-gold)', glyph: '⚜' });
@@ -473,9 +469,9 @@ function PlayerPanel({
         </ul>
       </section>
 
-      {player && <CharacterStats character={player} onChanged={onRefresh} />}
+      {player && <CharacterStats character={player} campaignId={campaignId} />}
       {companions.map((c) => (
-        <CharacterStats key={c.id} character={c} onChanged={onRefresh} />
+        <CharacterStats key={c.id} character={c} campaignId={campaignId} />
       ))}
     </aside>
   );
@@ -483,27 +479,34 @@ function PlayerPanel({
 
 function CharacterStats({
   character,
-  onChanged,
+  campaignId,
 }: {
   character: CharacterRow;
-  onChanged: () => void;
+  campaignId: string;
 }) {
   const pct = Math.round((character.current_hp / Math.max(1, character.max_hp)) * 100);
   const slots = character.spell_slots ?? {};
   const badge = character.is_ai ? '◉' : '✧';
   return (
     <section className="border-t border-line px-5 py-5">
-      <p className="mb-3 font-display text-[10px] uppercase tracking-[0.3em] text-gold">
-        {badge} {character.name}
-        {character.is_ai && <span className="ml-2 text-text-mute">· allié</span>}
-      </p>
+      <div className="mb-3 flex items-baseline justify-between">
+        <p className="font-display text-[10px] uppercase tracking-[0.3em] text-gold">
+          {badge} {character.name}
+          {character.is_ai && <span className="ml-2 text-text-mute">· allié</span>}
+        </p>
+        <Link
+          href={`/campaigns/${campaignId}/sheet?character=${character.id}`}
+          className="font-ui text-[10px] uppercase tracking-widest text-text-mute transition-colors hover:text-gold"
+        >
+          Fiche →
+        </Link>
+      </div>
       <Stat
         label="Points de vie"
         value={`${character.current_hp} / ${character.max_hp}`}
         pct={pct}
         barColor="linear-gradient(90deg, #5a1810, #9a3028)"
       />
-      <HpQuickControls characterId={character.id} onChanged={onChanged} />
       <Stat label="Classe d'armure" value={character.ac} />
       <Stat label="Vitesse" value={`${character.speed} m`} />
       {Object.keys(slots).length > 0 && (
@@ -517,56 +520,6 @@ function CharacterStats({
         </div>
       )}
     </section>
-  );
-}
-
-function HpQuickControls({
-  characterId,
-  onChanged,
-}: {
-  characterId: string;
-  onChanged: () => void;
-}) {
-  const [amount, setAmount] = useState(5);
-  const [pending, startTransition] = useTransition();
-  const run = (delta: number) => {
-    startTransition(async () => {
-      await adjustHP({ characterId, delta });
-      onChanged();
-    });
-  };
-  return (
-    <div className="-mt-1 mb-3 flex items-center gap-1">
-      <label className="flex items-center gap-1">
-        <span className="sr-only">Montant</span>
-        <input
-          type="number"
-          value={amount}
-          min={1}
-          onChange={(e) => setAmount(Math.max(1, Number(e.target.value)))}
-          title="Montant à appliquer"
-          className="w-12 rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-1 py-1 text-center font-mono text-[11px] text-text outline-none focus:border-gold"
-        />
-      </label>
-      <button
-        type="button"
-        disabled={pending}
-        onClick={() => run(-amount)}
-        title={`Retirer ${amount} PV`}
-        className="flex-1 border border-line bg-transparent py-1 font-ui text-[10px] uppercase tracking-widest text-text-mute transition-colors hover:border-blood hover:text-blood disabled:opacity-50"
-      >
-        − {amount} PV
-      </button>
-      <button
-        type="button"
-        disabled={pending}
-        onClick={() => run(amount)}
-        title={`Soigner de ${amount} PV`}
-        className="flex-1 border border-line bg-transparent py-1 font-ui text-[10px] uppercase tracking-widest text-text-mute transition-colors hover:border-moss hover:text-moss disabled:opacity-50"
-      >
-        + {amount} PV
-      </button>
-    </div>
   );
 }
 
