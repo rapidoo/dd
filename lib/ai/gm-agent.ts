@@ -19,6 +19,7 @@ import {
 import type { InventoryItem } from '../server/inventory-actions';
 import { anthropic, MODELS } from './claude';
 import { respondAsCompanion } from './companion-agent';
+import { compactHistory } from './rolling-summary';
 import { campaignIdOfSession, characterInSession, combatantBelongsToSession } from './tenant-guard';
 import { GM_TOOLS, type RecordEntityInput, type RequestRollInput } from './tools';
 
@@ -116,25 +117,31 @@ export interface DiceRollRecord {
  */
 export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
   const companionNameById = new Map(input.companions.map((c) => [c.id, c.name]));
-  const messages: Anthropic.Messages.MessageParam[] = input.history
-    .filter(
-      (m) => m.author_kind === 'user' || m.author_kind === 'gm' || m.author_kind === 'character',
-    )
-    .map((m) => {
-      if (m.author_kind === 'gm') {
-        return { role: 'assistant' as const, content: m.content };
-      }
-      if (m.author_kind === 'character') {
-        const name = (m.author_id && companionNameById.get(m.author_id)) || 'Compagnon';
-        return { role: 'user' as const, content: `(${name} dit) ${m.content}` };
-      }
-      return { role: 'user' as const, content: m.content };
-    });
+  const relevantHistory = input.history.filter(
+    (m) => m.author_kind === 'user' || m.author_kind === 'gm' || m.author_kind === 'character',
+  );
+  const { summary: rollingSummary, tail } = await compactHistory(input.sessionId, relevantHistory);
+
+  const messages: Anthropic.Messages.MessageParam[] = tail.map((m) => {
+    if (m.author_kind === 'gm') {
+      return { role: 'assistant' as const, content: m.content };
+    }
+    if (m.author_kind === 'character') {
+      const name = (m.author_id && companionNameById.get(m.author_id)) || 'Compagnon';
+      return { role: 'user' as const, content: `(${name} dit) ${m.content}` };
+    }
+    return { role: 'user' as const, content: m.content };
+  });
   if (input.userMessage && input.userMessage.trim().length > 0) {
     messages.push({ role: 'user', content: input.userMessage });
   }
 
-  const systemPrompt = buildSystemPrompt(input.player, input.companions, input.worldSummary);
+  const systemPrompt = buildSystemPrompt(
+    input.player,
+    input.companions,
+    input.worldSummary,
+    rollingSummary,
+  );
 
   let safety = 0;
   while (safety < 6) {
@@ -543,6 +550,7 @@ function buildSystemPrompt(
   player: CharacterRow | null,
   companions: CharacterRow[],
   worldSummary?: string | null,
+  rollingSummary?: string | null,
 ): string {
   const partyLines: string[] = [];
   if (player) {
@@ -574,9 +582,12 @@ function buildSystemPrompt(
   }
 
   const worldBlock = worldSummary ? `\nCampagne en cours :\n${worldSummary.trim()}\n` : '';
+  const rollingBlock = rollingSummary
+    ? `\nJusqu'ici dans cette veillée (résumé, les faits sont canon) :\n${rollingSummary.trim()}\n`
+    : '';
 
   return `${GM_SYSTEM_PROMPT}
-${worldBlock}
+${worldBlock}${rollingBlock}
 Équipe actuelle :
 ${partyLines.join('\n')}
 

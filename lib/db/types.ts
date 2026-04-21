@@ -95,6 +95,7 @@ export type SessionRow = {
   session_number: number;
   title: string | null;
   summary: string | null;
+  summary_cursor: Uuid | null;
   started_at: Iso;
   ended_at: Iso | null;
 };

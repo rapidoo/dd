@@ -14,6 +14,7 @@ chronologique :
 | 2 | `migrations/20260420120100_rls_policies.sql` | RLS activé partout + policies basées sur `owns_campaign(campaign_id)` |
 | 3 | `migrations/20260421090000_add_currency.sql` | Ajoute la colonne `currency` JSONB sur `characters` |
 | 4 | `migrations/20260421130000_message_cap.sql` | Cap 16 KB sur `messages.content` + `campaigns.world_summary`, 8 KB sur `sessions.summary` (anti-blob-abuse) |
+| 5 | `migrations/20260421150000_rolling_summary.sql` | `sessions.summary_cursor` (uuid du dernier message couvert par le résumé roulant) |
 
 ## Procédure rapide (Dashboard)
 
