@@ -42,6 +42,9 @@ export default async function CampaignPage({ params }: { params: Promise<Params>
           <Link href={`/campaigns/${campaign.id}/play`}>
             <BtnPrimary icon="✦">Veiller au coin du feu</BtnPrimary>
           </Link>
+          <Link href={`/campaigns/${campaign.id}/team`}>
+            <BtnPrimary icon="◉">Équipe</BtnPrimary>
+          </Link>
         </div>
       </section>
     </main>

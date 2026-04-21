@@ -3,6 +3,7 @@ import { createSupabaseServiceClient } from '../db/server';
 import type { MessageRow } from '../db/types';
 import { parseDiceExpression, rollD20, rollExpression } from '../rules/dice';
 import { anthropic, MODELS } from './claude';
+import { respondAsCompanion } from './companion-agent';
 import { GM_TOOLS, type RecordEntityInput, type RequestRollInput } from './tools';
 
 const GM_SYSTEM_PROMPT = `Tu es "Le Conteur", Maître du Donjon d'une partie de Donjons & Dragons 5e (SRD 5.1).
@@ -36,6 +37,7 @@ export type GmEvent =
   | { type: 'dice_request'; rollId: string; roll: DiceRollRecord; label: string }
   | { type: 'memory_recalled'; query: string; result: string }
   | { type: 'entity_recorded'; kind: string; name: string }
+  | { type: 'companion'; characterId: string; characterName: string; content: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
 
@@ -130,9 +132,52 @@ async function executeTool(
         events: [{ type: 'entity_recorded', kind: input.kind, name: input.name }],
       };
     }
+    case 'prompt_companion': {
+      const input = block.input as { character_id: string; hint?: string };
+      return executeCompanion(input, sessionId);
+    }
     default:
       return { result: { error: `Unknown tool: ${block.name}` }, events: [] };
   }
+}
+
+async function executeCompanion(
+  input: { character_id: string; hint?: string },
+  sessionId: string,
+): Promise<{ result: unknown; events: GmEvent[] }> {
+  const supabase = createSupabaseServiceClient();
+  const { data: character } = await supabase
+    .from('characters')
+    .select('*')
+    .eq('id', input.character_id)
+    .maybeSingle();
+  if (!character) {
+    return { result: { error: 'Compagnon introuvable' }, events: [] };
+  }
+  const { data: history } = await supabase
+    .from('messages')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+  const text = await respondAsCompanion({
+    sessionId,
+    character,
+    history: history ?? [],
+    hint: input.hint,
+  });
+  return {
+    result: { said: text || '(silence)' },
+    events: text
+      ? [
+          {
+            type: 'companion',
+            characterId: character.id,
+            characterName: character.name,
+            content: text,
+          },
+        ]
+      : [],
+  };
 }
 
 async function executeRoll(

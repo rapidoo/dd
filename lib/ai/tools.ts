@@ -70,6 +70,22 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
       required: ['kind', 'name'],
     },
   },
+  {
+    name: 'prompt_companion',
+    description:
+      "Donne la parole à l'un des compagnons IA. Choisis quel compagnon réagit à la situation actuelle selon sa personnalité.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        character_id: { type: 'string', description: 'ID du personnage compagnon (uuid).' },
+        hint: {
+          type: 'string',
+          description: "Brève indication au compagnon sur ce qu'on attend de lui dans cette scène.",
+        },
+      },
+      required: ['character_id'],
+    },
+  },
 ];
 
 export type GmToolName = 'request_roll' | 'recall_memory' | 'record_entity';

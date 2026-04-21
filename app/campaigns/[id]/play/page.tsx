@@ -23,7 +23,9 @@ export default async function PlayPage({ params }: { params: Promise<{ id: strin
     .select('*')
     .eq('campaign_id', campaign.id)
     .order('created_at', { ascending: true });
-  const player = (characters ?? []).find((c: CharacterRow) => !c.is_ai) ?? null;
+  const all = (characters ?? []) as CharacterRow[];
+  const player = all.find((c) => !c.is_ai) ?? null;
+  const companions = all.filter((c) => c.is_ai);
 
   return (
     <PlayClient
@@ -32,6 +34,7 @@ export default async function PlayPage({ params }: { params: Promise<{ id: strin
       sessionNumber={session.session_number}
       initialMessages={loaded.messages}
       player={player}
+      companions={companions}
     />
   );
 }

@@ -47,6 +47,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
             write('entity', { kind: ev.kind, name: ev.name });
           } else if (ev.type === 'memory_recalled') {
             write('memory', { query: ev.query, result: ev.result });
+          } else if (ev.type === 'companion') {
+            write('companion', {
+              characterId: ev.characterId,
+              name: ev.characterName,
+              content: ev.content,
+            });
           } else if (ev.type === 'error') {
             write('error', { message: ev.message });
           } else if (ev.type === 'done') {

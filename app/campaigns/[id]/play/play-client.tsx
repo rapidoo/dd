@@ -15,15 +15,17 @@ interface Props {
   sessionNumber: number;
   initialMessages: MessageRow[];
   player: CharacterRow | null;
+  companions: CharacterRow[];
 }
 
 interface DisplayMessage {
   id: string;
-  authorKind: 'user' | 'gm';
+  authorKind: 'user' | 'gm' | 'companion';
   authorName: string;
   content: string;
   time: string;
   streaming?: boolean;
+  color?: string;
 }
 
 export function PlayClient({
@@ -32,8 +34,12 @@ export function PlayClient({
   sessionNumber,
   initialMessages,
   player,
+  companions,
 }: Props) {
-  const [messages, setMessages] = useState<DisplayMessage[]>(() => initialMessages.map(toDisplay));
+  const companionMap = new Map(companions.map((c) => [c.id, c]));
+  const [messages, setMessages] = useState<DisplayMessage[]>(() =>
+    initialMessages.map((m) => toDisplay(m, companionMap)),
+  );
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
   const [dice, setDice] = useState<DiceOverlayState | null>(null);
@@ -108,6 +114,23 @@ export function PlayClient({
             setMessages((m) =>
               m.map((msg) => (msg.id === gmId ? { ...msg, content: msg.content + text } : msg)),
             );
+          } else if (ev.event === 'companion') {
+            const comp = ev.data as { characterId: string; name: string; content: string };
+            const now = new Date().toLocaleTimeString('fr-FR', {
+              hour: '2-digit',
+              minute: '2-digit',
+            });
+            setMessages((m) => [
+              ...m,
+              {
+                id: `c-${Date.now()}-${comp.characterId}`,
+                authorKind: 'companion',
+                authorName: comp.name,
+                content: comp.content,
+                time: now,
+                color: '#c47a3a',
+              },
+            ]);
           } else if (ev.event === 'dice') {
             const roll = ev.data as {
               dice: number[];
@@ -206,9 +229,16 @@ export function PlayClient({
                 <Message
                   key={m.id}
                   author={{
-                    kind: m.authorKind === 'gm' ? 'gm' : 'user',
+                    kind:
+                      m.authorKind === 'gm'
+                        ? 'gm'
+                        : m.authorKind === 'companion'
+                          ? 'companion'
+                          : 'user',
                     name: m.authorName,
-                    glyph: m.authorKind === 'gm' ? '⚜' : undefined,
+                    glyph:
+                      m.authorKind === 'gm' ? '⚜' : m.authorKind === 'companion' ? '◉' : undefined,
+                    color: m.color,
                   }}
                   text={renderNarration(m.content)}
                   time={m.time}
@@ -309,7 +339,21 @@ function renderNarration(raw: string) {
   );
 }
 
-function toDisplay(m: MessageRow): DisplayMessage {
+function toDisplay(m: MessageRow, companions: Map<string, CharacterRow>): DisplayMessage {
+  if (m.author_kind === 'character' && m.author_id) {
+    const comp = companions.get(m.author_id);
+    return {
+      id: m.id,
+      authorKind: 'companion',
+      authorName: comp?.name ?? 'Compagnon',
+      content: m.content,
+      time: new Date(m.created_at).toLocaleTimeString('fr-FR', {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+      color: '#c47a3a',
+    };
+  }
   return {
     id: m.id,
     authorKind: m.author_kind === 'user' ? 'user' : 'gm',
