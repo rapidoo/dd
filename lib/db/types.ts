@@ -23,15 +23,15 @@ export type AssetKind = 'scene' | 'portrait' | 'map' | 'item';
 export type CombatStatus = 'active' | 'ended';
 export type AdvantageValue = 'normal' | 'advantage' | 'disadvantage';
 
-export interface ProfileRow {
+export type ProfileRow = {
   id: Uuid;
   display_name: string;
   avatar_url: string | null;
   created_at: Iso;
   updated_at: Iso;
-}
+};
 
-export interface CampaignRow {
+export type CampaignRow = {
   id: Uuid;
   owner_id: Uuid;
   name: string;
@@ -43,9 +43,9 @@ export interface CampaignRow {
   status: CampaignStatus;
   created_at: Iso;
   updated_at: Iso;
-}
+};
 
-export interface CharacterRow {
+export type CharacterRow = {
   id: Uuid;
   campaign_id: Uuid;
   owner_id: Uuid | null;
@@ -86,9 +86,9 @@ export interface CharacterRow {
   portrait_url: string | null;
   created_at: Iso;
   updated_at: Iso;
-}
+};
 
-export interface SessionRow {
+export type SessionRow = {
   id: Uuid;
   campaign_id: Uuid;
   session_number: number;
@@ -96,9 +96,9 @@ export interface SessionRow {
   summary: string | null;
   started_at: Iso;
   ended_at: Iso | null;
-}
+};
 
-export interface MessageRow {
+export type MessageRow = {
   id: Uuid;
   session_id: Uuid;
   author_kind: AuthorKind;
@@ -106,9 +106,9 @@ export interface MessageRow {
   content: string;
   metadata: Record<string, unknown>;
   created_at: Iso;
-}
+};
 
-export interface DiceRollRow {
+export type DiceRollRow = {
   id: Uuid;
   session_id: Uuid;
   character_id: Uuid | null;
@@ -123,9 +123,9 @@ export interface DiceRollRow {
   outcome: string | null;
   context: Record<string, unknown>;
   created_at: Iso;
-}
+};
 
-export interface CombatEncounterRow {
+export type CombatEncounterRow = {
   id: Uuid;
   session_id: Uuid;
   status: CombatStatus;
@@ -135,9 +135,9 @@ export interface CombatEncounterRow {
   combatants: unknown[];
   started_at: Iso;
   ended_at: Iso | null;
-}
+};
 
-export interface EntityRow {
+export type EntityRow = {
   id: Uuid;
   campaign_id: Uuid;
   kind: EntityKind;
@@ -147,9 +147,9 @@ export interface EntityRow {
   metadata: Record<string, unknown>;
   created_at: Iso;
   updated_at: Iso;
-}
+};
 
-export interface GeneratedAssetRow {
+export type GeneratedAssetRow = {
   id: Uuid;
   campaign_id: Uuid;
   kind: AssetKind;
@@ -157,36 +157,31 @@ export interface GeneratedAssetRow {
   storage_path: string;
   entity_id: Uuid | null;
   created_at: Iso;
-}
+};
 
-export interface Database {
+type Table<R, I = Partial<R>, U = Partial<R>> = {
+  Row: R;
+  Insert: I;
+  Update: U;
+  Relationships: [];
+};
+
+export type Database = {
   public: {
     Tables: {
-      profiles: { Row: ProfileRow; Insert: Partial<ProfileRow>; Update: Partial<ProfileRow> };
-      campaigns: { Row: CampaignRow; Insert: Partial<CampaignRow>; Update: Partial<CampaignRow> };
-      characters: {
-        Row: CharacterRow;
-        Insert: Partial<CharacterRow>;
-        Update: Partial<CharacterRow>;
-      };
-      sessions: { Row: SessionRow; Insert: Partial<SessionRow>; Update: Partial<SessionRow> };
-      messages: { Row: MessageRow; Insert: Partial<MessageRow>; Update: Partial<MessageRow> };
-      dice_rolls: {
-        Row: DiceRollRow;
-        Insert: Partial<DiceRollRow>;
-        Update: Partial<DiceRollRow>;
-      };
-      combat_encounters: {
-        Row: CombatEncounterRow;
-        Insert: Partial<CombatEncounterRow>;
-        Update: Partial<CombatEncounterRow>;
-      };
-      entities: { Row: EntityRow; Insert: Partial<EntityRow>; Update: Partial<EntityRow> };
-      generated_assets: {
-        Row: GeneratedAssetRow;
-        Insert: Partial<GeneratedAssetRow>;
-        Update: Partial<GeneratedAssetRow>;
-      };
+      profiles: Table<ProfileRow>;
+      campaigns: Table<CampaignRow>;
+      characters: Table<CharacterRow>;
+      sessions: Table<SessionRow>;
+      messages: Table<MessageRow>;
+      dice_rolls: Table<DiceRollRow>;
+      combat_encounters: Table<CombatEncounterRow>;
+      entities: Table<EntityRow>;
+      generated_assets: Table<GeneratedAssetRow>;
     };
+    Views: Record<string, { Row: Record<string, unknown>; Relationships: [] }>;
+    Functions: Record<string, { Args: Record<string, never>; Returns: unknown }>;
+    Enums: Record<string, never>;
+    CompositeTypes: Record<string, never>;
   };
-}
+};
