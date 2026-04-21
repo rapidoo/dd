@@ -45,11 +45,11 @@ e2e quirks: `playwright.config.ts` boots its own `next dev` on port 3001 with `A
 3. **Debug shortcut** — `lib/ai/debug-mode.ts` intercepts `/debug <cmd>` messages in dev/preview only, skipping the LLM entirely for UI smoke tests.
 4. **`runGmTurn()` generator** (`lib/ai/gm-agent.ts`) — streams `GmEvent`s. Inside:
    - `compactHistory()` from `rolling-summary.ts` keeps only the last 6 messages verbatim; older ones are replaced by a Haiku-generated summary stored in `sessions.summary` + `sessions.summary_cursor`. Regenerated every ~8 new messages.
-   - `listEntities()` from Neo4j injects up to 6 known entities into the system prompt ("Mémoire" block).
+   - `listEntitiesForCampaign()` from Neo4j (source of truth for campaign memory) injects up to 6 known entities into the system prompt ("Mémoire" block), with the session numbers where each was seen.
    - LLM tool-use loop (max 6 iterations) — the model emits `request_roll`, `apply_damage`, `start_combat`, `cast_spell`, `prompt_companion`, etc. Each tool has a Zod input schema validated before side-effects.
    - `hasRollDelegation()` safeguard: if the GM writes "Fais un jet" / "Lance un dé" **without** calling `request_roll`, the turn is swallowed and the model is re-prompted. Same pattern is tested in `tests/unit/gm-roll-delegation.test.ts`.
 5. **Persist GM message** (Postgres `messages` table).
-6. **Fire-and-forget concierge** — `lib/ai/concierge.ts` reads the final narration via a second LLM call (with `jsonMode:true` on Ollama), extracts entities → Neo4j and inventory/currency deltas → Postgres. Errors log via `console.warn` in dev, swallowed in prod. **This is why Opus doesn't need `grant_item`/`adjust_currency` RÈGLE ABSOLUE anymore** — the janitor handles bookkeeping from prose.
+6. **Fire-and-forget concierge** — `lib/ai/concierge.ts` reads the final narration via a second LLM call (with `jsonMode:true` on Ollama), extracts entities → Neo4j (with a stable UUID + `:APPEARS_IN` edge to the current `Session` node) and inventory/currency deltas → Postgres. Errors log via `console.warn('[concierge.*]')` in dev. **This is why Opus doesn't need `grant_item`/`adjust_currency` RÈGLE ABSOLUE anymore** — the janitor handles bookkeeping from prose. Campaign memory (`public.entities` Postgres table) has moved to Neo4j; the Postgres table is now DEPRECATED and no longer read or written.
 
 ### LLM provider abstraction (`lib/ai/llm/`)
 

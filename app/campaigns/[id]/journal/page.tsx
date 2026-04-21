@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { createSupabaseServerClient } from '../../../../lib/db/server';
 import { requireUser } from '../../../../lib/server/auth';
 import { getCampaign } from '../../../../lib/server/campaigns';
+import { getCampaignCodex } from '../../../../lib/server/codex';
 
 const KIND_LABEL: Record<string, string> = {
   npc: 'PNJ',
@@ -20,18 +21,15 @@ export default async function JournalPage({ params }: { params: Promise<{ id: st
   if (!campaign) notFound();
 
   const supabase = await createSupabaseServerClient();
-  const [{ data: sessions }, { data: entities }] = await Promise.all([
+  const [{ data: sessions }, codex] = await Promise.all([
     supabase
       .from('sessions')
       .select('*')
       .eq('campaign_id', id)
       .order('session_number', { ascending: false }),
-    supabase
-      .from('entities')
-      .select('*')
-      .eq('campaign_id', id)
-      .order('updated_at', { ascending: false }),
+    getCampaignCodex(id),
   ]);
+  const entities = codex.ok ? codex.entities : [];
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-10 px-6 py-12 text-text">
@@ -76,7 +74,11 @@ export default async function JournalPage({ params }: { params: Promise<{ id: st
 
       <section>
         <h2 className="mb-3 font-display text-sm uppercase tracking-[0.3em] text-gold">✧ Codex</h2>
-        {entities && entities.length > 0 ? (
+        {!codex.ok ? (
+          <p className="font-narr italic text-red-400/80">
+            Mémoire de campagne indisponible — {codex.error ?? 'erreur inconnue'}
+          </p>
+        ) : entities.length > 0 ? (
           <div className="grid gap-3 md:grid-cols-2">
             {entities.map((e) => (
               <article key={e.id} className="border border-line bg-card p-4">
@@ -87,6 +89,15 @@ export default async function JournalPage({ params }: { params: Promise<{ id: st
                 {e.short_description && (
                   <p className="mt-1 font-narr text-sm italic text-text-mid">
                     {e.short_description}
+                  </p>
+                )}
+                {e.sessions.length > 0 && (
+                  <p className="mt-2 font-mono text-[10px] uppercase tracking-widest text-text-faint">
+                    Session{e.sessions.length > 1 ? 's' : ''}{' '}
+                    {e.sessions
+                      .slice()
+                      .sort((a, b) => a - b)
+                      .join(', ')}
                   </p>
                 )}
               </article>

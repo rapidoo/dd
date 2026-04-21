@@ -4,12 +4,21 @@ import type { CharacterRow } from '../../lib/db/types';
 const PLAYER_ID = '00000000-0000-0000-0000-000000000001';
 const COMPANION_ID = '00000000-0000-0000-0000-000000000002';
 
-// Neo4j mock
+// Neo4j mock — track entity + session upserts and APPEARS_IN links
 const entityUpserts: Array<Record<string, unknown>> = [];
+const sessionUpserts: Array<Record<string, unknown>> = [];
+const entitySessionLinks: Array<{ entityId: string; sessionId: string }> = [];
 vi.mock('../../lib/neo4j/queries', () => ({
-  upsertEntity: async (e: Record<string, unknown>) => {
+  upsertEntityNode: async (e: Record<string, unknown>) => {
     entityUpserts.push(e);
   },
+  upsertSessionNode: async (s: Record<string, unknown>) => {
+    sessionUpserts.push(s);
+  },
+  linkEntityToSession: async (entityId: string, sessionId: string) => {
+    entitySessionLinks.push({ entityId, sessionId });
+  },
+  findEntityByName: async () => null,
 }));
 
 // LLM mock — returns whatever we set
@@ -108,6 +117,8 @@ function mkCharacter(
 describe('runConcierge', () => {
   beforeEach(() => {
     entityUpserts.length = 0;
+    sessionUpserts.length = 0;
+    entitySessionLinks.length = 0;
     updates.length = 0;
     for (const k of Object.keys(charState)) delete charState[k];
     charState[PLAYER_ID] = { inventory: [], currency: { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 } };
@@ -118,6 +129,8 @@ describe('runConcierge', () => {
   it('does nothing on empty narration', async () => {
     await runConcierge({
       campaignId: 'c1',
+      sessionId: 's1',
+      sessionNumber: 1,
       narration: '',
       player: mkCharacter(PLAYER_ID, false),
       companions: [],
@@ -143,14 +156,22 @@ describe('runConcierge', () => {
     });
     await runConcierge({
       campaignId: 'c1',
+      sessionId: 's1',
+      sessionNumber: 1,
       narration:
         "Voici ce que vous trouvez sur le maître gris. La bourse contient quarante-sept pièces d'or, douze d'argent, et trois pièces de platine.",
       player: mkCharacter(PLAYER_ID, false),
       companions: [mkCharacter(COMPANION_ID, true)],
     });
-    // Entity was upserted
+    // Entity was upserted with a UUID (not the old synthetic slug id)
     expect(entityUpserts).toHaveLength(1);
     expect(entityUpserts[0]).toMatchObject({ kind: 'npc', name: 'Maître Gris' });
+    expect(entityUpserts[0]?.id).toMatch(/[0-9a-f-]{36}/);
+    // Session node created + linked via APPEARS_IN
+    expect(sessionUpserts).toHaveLength(1);
+    expect(sessionUpserts[0]).toMatchObject({ id: 's1', session_number: 1 });
+    expect(entitySessionLinks).toHaveLength(1);
+    expect(entitySessionLinks[0]?.sessionId).toBe('s1');
     // 3 items appeared on the player
     expect((charState[PLAYER_ID]?.inventory as unknown[]).length).toBe(3);
     // Currency applied: 0 → 47 gp, 0 → 12 sp, 0 → 3 pp
@@ -170,6 +191,8 @@ describe('runConcierge', () => {
     });
     await runConcierge({
       campaignId: 'c1',
+      sessionId: 's1',
+      sessionNumber: 1,
       narration: 'Un long texte décrivant une mystérieuse couronne trouvée dans un tombeau.',
       player: mkCharacter(PLAYER_ID, false),
       companions: [],
@@ -196,6 +219,8 @@ describe('runConcierge', () => {
     });
     await runConcierge({
       campaignId: 'c1',
+      sessionId: 's1',
+      sessionNumber: 1,
       narration:
         "Razmoo prend l'épée et 20 po. Vaeloria garde les potions et 10 po. Un partage propre.",
       player: mkCharacter(PLAYER_ID, false),
@@ -231,6 +256,8 @@ describe('runConcierge', () => {
     });
     await runConcierge({
       campaignId: 'c1',
+      sessionId: 's1',
+      sessionNumber: 1,
       narration: 'Tu ramasses un marteau de guerre massif et le glisses à ta ceinture.',
       player: mkCharacter(PLAYER_ID, false),
       companions: [],
@@ -251,6 +278,8 @@ describe('runConcierge', () => {
     });
     await runConcierge({
       campaignId: 'c1',
+      sessionId: 's1',
+      sessionNumber: 1,
       narration: "Tu dépenses 20 po chez l'aubergiste pour une chambre à l'année.",
       player: mkCharacter(PLAYER_ID, false),
       companions: [],
@@ -262,6 +291,8 @@ describe('runConcierge', () => {
     haikuThrow = true;
     await runConcierge({
       campaignId: 'c1',
+      sessionId: 's1',
+      sessionNumber: 1,
       narration: 'Une narration assez longue pour déclencher le concierge au-delà du seuil.',
       player: mkCharacter(PLAYER_ID, false),
       companions: [],

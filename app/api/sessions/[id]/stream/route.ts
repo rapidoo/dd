@@ -47,7 +47,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   // existence and to block any downstream service-role writes.
   const { data: session } = await supabase
     .from('sessions')
-    .select('campaign_id')
+    .select('campaign_id, session_number')
     .eq('id', sessionId)
     .maybeSingle();
   if (!session) return new Response('Not found', { status: 404 });
@@ -135,6 +135,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
               // surfaces errors.
               void runConcierge({
                 campaignId: session.campaign_id,
+                sessionId,
+                sessionNumber: session.session_number,
                 narration: content,
                 player,
                 companions,

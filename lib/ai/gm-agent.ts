@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow, MessageRow } from '../db/types';
-import { type EntityKind, listEntities, recallEntities, upsertEntity } from '../neo4j/queries';
+import {
+  type EntityKind,
+  listEntitiesForCampaign,
+  searchEntities,
+  upsertEntityNode,
+} from '../neo4j/queries';
 import { parseDiceExpression, rollD20, rollExpression } from '../rules/dice';
 import { CONDITION_TYPES, type ConditionType } from '../rules/types';
 import { weaponAttack } from '../rules/weapon-attack';
@@ -85,8 +90,16 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     (m) => m.author_kind === 'user' || m.author_kind === 'gm' || m.author_kind === 'character',
   );
   const { summary: rollingSummary, tail } = await compactHistory(input.sessionId, relevantHistory);
-  const campaignId = await campaignIdOfSession(input.sessionId).catch(() => null);
-  const knownEntities = campaignId ? await listEntities(campaignId).catch(() => []) : [];
+  const campaignId = await campaignIdOfSession(input.sessionId).catch((err) => {
+    if (process.env.NODE_ENV !== 'production') console.warn('[memory.campaignId]', err);
+    return null;
+  });
+  const knownEntities = campaignId
+    ? await listEntitiesForCampaign(campaignId, 6).catch((err) => {
+        if (process.env.NODE_ENV !== 'production') console.warn('[memory.listEntities]', err);
+        return [];
+      })
+    : [];
 
   const messages: ChatMessage[] = tail.map((m) => {
     if (m.author_kind === 'gm') {
@@ -297,7 +310,7 @@ async function executeTool(
       const campaignId = await campaignIdOfSession(sessionId);
       if (!campaignId) return { result: { context: 'Session invalide.' }, events: [] };
       try {
-        const entities = await recallEntities(campaignId, q);
+        const entities = await searchEntities(campaignId, q);
         const context =
           entities.length === 0
             ? 'Aucune entité correspondante en mémoire.'
@@ -324,32 +337,24 @@ async function executeTool(
       const input: RecordEntityInput = p.data;
       const campaignId = await campaignIdOfSession(sessionId);
       if (!campaignId) return { result: { ok: false, error: 'Session invalide.' }, events: [] };
-      const supabase = createSupabaseServiceClient();
-      const { data: row } = await supabase
-        .from('entities')
-        .insert({
-          campaign_id: campaignId,
-          kind: input.kind,
-          name: input.name,
-          short_description: input.short_description ?? null,
-        })
-        .select('*')
-        .single();
+      const id = crypto.randomUUID();
       try {
-        if (row) {
-          await upsertEntity({
-            id: row.id,
-            campaign_id: campaignId,
-            kind: input.kind as EntityKind,
-            name: input.name,
-            short_description: input.short_description,
-          });
-        }
+        await upsertEntityNode({
+          id,
+          campaign_id: campaignId,
+          kind: input.kind as EntityKind,
+          name: input.name,
+          short_description: input.short_description,
+        });
       } catch (err) {
-        console.warn('Neo4j upsert failed, continuing', err);
+        if (process.env.NODE_ENV !== 'production') console.warn('[memory.record_entity]', err);
+        return {
+          result: { ok: false, error: 'Neo4j indisponible' },
+          events: [],
+        };
       }
       return {
-        result: { ok: true, id: row?.id },
+        result: { ok: true, id },
         events: [{ type: 'entity_recorded', kind: input.kind, name: input.name }],
       };
     }

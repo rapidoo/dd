@@ -13,13 +13,20 @@ function getDriver(): Driver {
 }
 
 /**
- * Runs a Cypher statement against the default Neo4j database and closes the
- * session afterwards. Keep queries parameterised — never interpolate input.
+ * Runs a Cypher statement and closes the session afterwards. Errors are
+ * logged in dev (`[neo4j]`) before being re-thrown — silent swallowing
+ * has historically hidden empty-graph bugs. Keep queries parameterised —
+ * never interpolate input.
  */
 export async function withSession<T>(fn: (session: Session) => Promise<T>): Promise<T> {
   const session = getDriver().session();
   try {
     return await fn(session);
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[neo4j]', err instanceof Error ? err.message : err);
+    }
+    throw err;
   } finally {
     await session.close();
   }

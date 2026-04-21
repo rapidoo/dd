@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow } from '../db/types';
-import { type EntityKind, upsertEntity } from '../neo4j/queries';
+import {
+  type EntityKind,
+  findEntityByName,
+  linkEntityToSession,
+  upsertEntityNode,
+  upsertSessionNode,
+} from '../neo4j/queries';
 import type { InventoryItem } from '../server/inventory-actions';
 import { llm } from './llm';
 
@@ -74,6 +80,8 @@ export type ConciergePayload = z.infer<typeof lootSchema>;
 
 export interface ConciergeInput {
   campaignId: string;
+  sessionId: string;
+  sessionNumber: number;
   narration: string;
   player: CharacterRow | null;
   companions: CharacterRow[];
@@ -87,25 +95,45 @@ export async function runConcierge(input: ConciergeInput): Promise<void> {
   const payload = await extract(input, party);
   if (!payload) return;
 
-  // Entities → Neo4j
-  await Promise.all(
-    payload.entities.map((e) =>
-      upsertEntity({
-        id: makeEntityId(e.kind, e.name),
-        campaign_id: input.campaignId,
-        kind: e.kind as EntityKind,
-        name: e.name,
-        short_description: e.short_description,
-      }).catch(() => undefined),
-    ),
-  );
+  // Entities → Neo4j (source of truth for campaign memory)
+  if (payload.entities.length > 0) {
+    await persistEntitiesToGraph(input, payload.entities).catch((err) => {
+      logConciergeFailure('neo4j_error', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
 
-  // Loot → Postgres (items + currency)
+  // Loot → Postgres (items + currency, transactional game state)
   const validIds = new Set(party.map((c) => c.id));
   for (const op of payload.loot) {
     if (!validIds.has(op.character_id)) continue;
     if (op.items.length > 0) await applyItems(op.character_id, op.items);
     if (hasNonZeroCurrency(op.currency)) await applyCurrency(op.character_id, op.currency);
+  }
+}
+
+async function persistEntitiesToGraph(
+  input: ConciergeInput,
+  entities: ConciergePayload['entities'],
+): Promise<void> {
+  // Make sure the Session node exists once, then MERGE each entity and link it.
+  await upsertSessionNode({
+    id: input.sessionId,
+    campaign_id: input.campaignId,
+    session_number: input.sessionNumber,
+  });
+  for (const e of entities) {
+    const existing = await findEntityByName(input.campaignId, e.kind as EntityKind, e.name);
+    const id = existing?.id ?? crypto.randomUUID();
+    await upsertEntityNode({
+      id,
+      campaign_id: input.campaignId,
+      kind: e.kind as EntityKind,
+      name: e.name,
+      short_description: e.short_description,
+    });
+    await linkEntityToSession(id, input.sessionId);
   }
 }
 
@@ -340,15 +368,4 @@ export function extractJson(text: string): string {
     }
   }
   return '';
-}
-
-function makeEntityId(kind: string, name: string): string {
-  const slug = name
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '')
-    .slice(0, 60);
-  return `${kind}:${slug}`;
 }
