@@ -135,12 +135,53 @@ supabase/migrations/    SQL (schéma + RLS)
 tests/                  vitest unit + (à venir) Playwright e2e
 ```
 
+## Conformité SRD D&D 5e
+
+`lib/rules/` implémente les règles SRD 5.1 en TypeScript pur (≥ 97 % de
+couverture). Audit détaillé contre `dnd5e_rules.md` :
+
+### Implémenté
+
+- Jets de d20 avec avantage/désavantage (annulation correcte, pas de stacking)
+- Critiques : dés d'arme doublés, modificateurs non doublés
+- 18 compétences mappées sur leur carac. + **Expertise** (maîtrise doublée) + scores passifs
+- Bonus de maîtrise par niveau (+2 → +6)
+- CA avec caps DEX, STR min, désavantage discrétion, bouclier +2
+- Sauvegardes de mort complètes : 3 succès = stabilisé · 3 échecs = mort ·
+  nat 20 = reprise à 1 PV · nat 1 = 2 échecs
+- 14 conditions officielles + échelle d'épuisement 6 niveaux
+- Emplacements de sorts (lanceurs complets + partiels, tables 1-20 verbatim)
+- DD de sauvegarde sort, bonus d'attaque sort, concentration (DD `max(10, dmg/2)`)
+- Repos court (dépense de DV) / long (PV + slots + exhaustion −1 si nourri)
+- XP + ASI aux niveaux 4/8/12/16/19
+- Turn economy : 1 action / 1 bonus / 1 réaction / mouvement / interactions libres
+
+### Manques à fort impact narratif
+
+| Règle SRD | État | Conséquence en jeu |
+|---|---|---|
+| Attaques d'opportunité | ❌ absent | Un joueur fuit un combat sans conséquence ; "désengager" perd son sens |
+| Couverture (+2 / +5 / totale) | ❌ absent | Le MJ décrit "tu te caches derrière le muret" mais la CA ne bouge pas |
+| Stabilisation via Médecine DD 10 | ❌ absent | Pas de soin manuel d'un PJ tombé — seuls les sorts guérisseurs fonctionnent |
+| Upcast (sort à niveau supérieur) | ❌ absent | Impossible de représenter "Boule de feu en niv. 5 = +2d6" |
+| Rituels | ❌ absent | Sorts utilitaires lents (Détection, Communication) impossibles hors slot |
+
+### Manques à impact moyen
+
+| Règle | État | Détail |
+|---|---|---|
+| Propriétés d'armes | 🟡 partiel | `weapon-attack.ts` gère `finesse` + `ranged`. Manquent : `versatile` (1d8→1d10 à 2 mains), `heavy`, `reach`, `thrown`, `two-handed`, `loading`, `ammunition` |
+| Point-buy 8–15 | ❌ absent | Le wizard accepte des scores bruts, sans validation du budget 27 points |
+| Table de rencontres (XP par CR) | ❌ absent | Pas bloquant en solo narratif, empêche tout calibrage auto de difficulté |
+
 ## Prochaines étapes (v0.2+)
 
+- **Combler les manques SRD prioritaires** : attaques d'opportunité, couverture, upcast, stabilisation Médecine DD 10 (~250 lignes + tests, débloque 4 motifs narratifs déjà tentés par le MJ)
 - Stabiliser le mode Ollama (fiabilité tool-calls, JSON concierge, streaming)
 - Onboarding guidé complet (campagne → pitch → PJ → première session)
 - Génération d'images (scènes / portraits) — Replicate / fal.ai
 - Sous-vues Sorts et Sac (actuellement agrégées dans la fiche)
-- Rate limiting des appels LLM
+- Propriétés d'armes complètes (versatile, heavy, reach, thrown, two-handed)
+- Point-buy 8–15 sur le wizard de création de PJ
 - Playwright e2e sur les parcours critiques
 - Déploiement Vercel + preview URL
