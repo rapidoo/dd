@@ -157,6 +157,53 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'grant_item',
+    description:
+      "Ajoute ou retire un objet de l'inventaire d'un personnage. À utiliser quand le joueur trouve un trésor, achète, consomme ou perd un objet. Le panneau de la fiche se rafraîchit automatiquement.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        character_id: {
+          type: 'string',
+          description: 'UUID du personnage (voir section Équipe actuelle).',
+        },
+        name: { type: 'string', description: 'Nom lisible de l\'objet (ex. "Potion de soin").' },
+        qty: {
+          type: 'number',
+          description:
+            'Quantité positive = ajouter, négative = retirer. Les quantités négatives suppriment progressivement.',
+        },
+        type: {
+          type: 'string',
+          enum: ['weapon', 'armor', 'tool', 'consumable', 'treasure', 'misc'],
+          description: "Type de l'objet.",
+        },
+        description: {
+          type: 'string',
+          description: 'Description courte (effet, propriétés, origine).',
+        },
+      },
+      required: ['character_id', 'name', 'qty'],
+    },
+  },
+  {
+    name: 'adjust_currency',
+    description:
+      'Ajuste la bourse du personnage. Valeurs positives = gagner, négatives = dépenser. Le personnage ne peut pas aller en négatif (clampé à 0).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        character_id: { type: 'string' },
+        cp: { type: 'number', description: 'Cuivre' },
+        sp: { type: 'number', description: 'Argent' },
+        ep: { type: 'number', description: 'Électrum' },
+        gp: { type: 'number', description: 'Or' },
+        pp: { type: 'number', description: 'Platine' },
+      },
+      required: ['character_id'],
+    },
+  },
+  {
     name: 'prompt_companion',
     description:
       "Donne la parole à l'un des compagnons IA. Choisis quel compagnon réagit à la situation actuelle selon sa personnalité.",

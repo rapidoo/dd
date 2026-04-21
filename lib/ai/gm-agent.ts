@@ -225,6 +225,27 @@ async function executeTool(
         events: [{ type: 'entity_recorded', kind: input.kind, name: input.name }],
       };
     }
+    case 'grant_item': {
+      const input = block.input as {
+        character_id: string;
+        name: string;
+        qty: number;
+        type?: 'weapon' | 'armor' | 'tool' | 'consumable' | 'treasure' | 'misc';
+        description?: string;
+      };
+      return await grantItemToCharacter(input);
+    }
+    case 'adjust_currency': {
+      const input = block.input as {
+        character_id: string;
+        cp?: number;
+        sp?: number;
+        ep?: number;
+        gp?: number;
+        pp?: number;
+      };
+      return await adjustCharacterCurrency(input);
+    }
     case 'prompt_companion': {
       const input = block.input as { character_id: string; hint?: string };
       return executeCompanion(input, sessionId);
@@ -569,6 +590,95 @@ async function toggleConditionOnCharacter(
   await supabase.from('characters').update({ conditions: next }).eq('id', characterId);
   return {
     result: { ok: true, conditions: next },
+    events: [{ type: 'combat_update' }],
+  };
+}
+
+interface InventoryItem {
+  id: string;
+  name: string;
+  qty: number;
+  type?: 'weapon' | 'armor' | 'tool' | 'consumable' | 'treasure' | 'misc';
+  description?: string;
+}
+
+async function grantItemToCharacter(input: {
+  character_id: string;
+  name: string;
+  qty: number;
+  type?: 'weapon' | 'armor' | 'tool' | 'consumable' | 'treasure' | 'misc';
+  description?: string;
+}): Promise<{ result: unknown; events: GmEvent[] }> {
+  const supabase = createSupabaseServiceClient();
+  const { data: character } = await supabase
+    .from('characters')
+    .select('id, inventory')
+    .eq('id', input.character_id)
+    .maybeSingle();
+  if (!character) return { result: { error: 'Personnage introuvable' }, events: [] };
+  const items = (character.inventory as InventoryItem[]) ?? [];
+  const type = input.type ?? 'misc';
+  const existing = items.find(
+    (i) => i.name.toLowerCase() === input.name.toLowerCase() && (i.type ?? 'misc') === type,
+  );
+  let next: InventoryItem[];
+  if (existing) {
+    next = items
+      .map((i) => (i === existing ? { ...i, qty: i.qty + input.qty } : i))
+      .filter((i) => i.qty > 0);
+  } else if (input.qty > 0) {
+    next = [
+      ...items,
+      {
+        id: `i-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        name: input.name,
+        qty: input.qty,
+        type,
+        description: input.description,
+      },
+    ];
+  } else {
+    next = items;
+  }
+  await supabase.from('characters').update({ inventory: next }).eq('id', input.character_id);
+  return {
+    result: { ok: true, inventory: next },
+    events: [{ type: 'combat_update' }],
+  };
+}
+
+async function adjustCharacterCurrency(input: {
+  character_id: string;
+  cp?: number;
+  sp?: number;
+  ep?: number;
+  gp?: number;
+  pp?: number;
+}): Promise<{ result: unknown; events: GmEvent[] }> {
+  const supabase = createSupabaseServiceClient();
+  const { data: character } = await supabase
+    .from('characters')
+    .select('id, currency')
+    .eq('id', input.character_id)
+    .maybeSingle();
+  if (!character) return { result: { error: 'Personnage introuvable' }, events: [] };
+  const current = (character.currency as {
+    cp: number;
+    sp: number;
+    ep: number;
+    gp: number;
+    pp: number;
+  }) ?? { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 };
+  const next = {
+    cp: Math.max(0, current.cp + (input.cp ?? 0)),
+    sp: Math.max(0, current.sp + (input.sp ?? 0)),
+    ep: Math.max(0, current.ep + (input.ep ?? 0)),
+    gp: Math.max(0, current.gp + (input.gp ?? 0)),
+    pp: Math.max(0, current.pp + (input.pp ?? 0)),
+  };
+  await supabase.from('characters').update({ currency: next }).eq('id', input.character_id);
+  return {
+    result: { ok: true, currency: next },
     events: [{ type: 'combat_update' }],
   };
 }

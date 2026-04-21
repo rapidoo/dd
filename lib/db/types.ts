@@ -82,6 +82,7 @@ export type CharacterRow = {
   };
   concentration: { active: boolean; spellName: string | null; level: number | null };
   exhaustion: number;
+  currency: { cp: number; sp: number; ep: number; gp: number; pp: number };
   persona: Record<string, unknown> | null;
   portrait_url: string | null;
   created_at: Iso;

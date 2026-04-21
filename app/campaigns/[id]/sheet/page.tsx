@@ -8,7 +8,9 @@ import { proficiencyBonus } from '../../../../lib/rules/proficiency';
 import { CLASSES, SPECIES } from '../../../../lib/rules/srd';
 import { requireUser } from '../../../../lib/server/auth';
 import { getCampaign } from '../../../../lib/server/campaigns';
+import type { InventoryItem } from '../../../../lib/server/inventory-actions';
 import { HPControls } from './hp-controls';
+import { InventorySection, PurseSection } from './inventory';
 
 export default async function SheetPage({
   params,
@@ -155,6 +157,16 @@ export default async function SheetPage({
             ))}
         </section>
       )}
+
+      <PurseSection
+        characterId={character.id}
+        currency={character.currency ?? { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 }}
+      />
+
+      <InventorySection
+        characterId={character.id}
+        inventory={(character.inventory as InventoryItem[]) ?? []}
+      />
     </main>
   );
 }
