@@ -71,6 +71,84 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: 'start_combat',
+    description:
+      "Démarre une rencontre : fournis la liste des PNJ ennemis. Les PJ et compagnons sont ajoutés automatiquement. L'initiative est roulée côté serveur.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        npcs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              ac: { type: 'number' },
+              hp: { type: 'number' },
+              dex_mod: { type: 'number' },
+            },
+            required: ['name', 'ac', 'hp'],
+          },
+        },
+      },
+      required: ['npcs'],
+    },
+  },
+  {
+    name: 'apply_damage',
+    description: 'Applique des dégâts ou des soins à un combattant (combatant_id).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        combatant_id: { type: 'string' },
+        amount: { type: 'number', description: 'positif = dégâts, négatif = soins' },
+      },
+      required: ['combatant_id', 'amount'],
+    },
+  },
+  {
+    name: 'apply_condition',
+    description: 'Pose ou retire une condition sur un combattant.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        combatant_id: { type: 'string' },
+        condition: {
+          type: 'string',
+          enum: [
+            'prone',
+            'grappled',
+            'blinded',
+            'deafened',
+            'charmed',
+            'poisoned',
+            'restrained',
+            'stunned',
+            'unconscious',
+            'incapacitated',
+            'invisible',
+            'paralyzed',
+            'petrified',
+            'frightened',
+          ],
+        },
+        add: { type: 'boolean' },
+        duration_rounds: { type: 'number' },
+      },
+      required: ['combatant_id', 'condition', 'add'],
+    },
+  },
+  {
+    name: 'next_turn',
+    description: "Passe au combattant suivant dans l'ordre d'initiative.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'end_combat',
+    description: 'Termine la rencontre en cours. À appeler une fois le combat résolu.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'prompt_companion',
     description:
       "Donne la parole à l'un des compagnons IA. Choisis quel compagnon réagit à la situation actuelle selon sa personnalité.",

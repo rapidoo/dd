@@ -1,7 +1,18 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { createSupabaseServiceClient } from '../db/server';
-import type { MessageRow } from '../db/types';
+import type { CharacterRow, MessageRow } from '../db/types';
 import { parseDiceExpression, rollD20, rollExpression } from '../rules/dice';
+import type { ConditionType } from '../rules/types';
+import {
+  activeEncounter,
+  advanceTurnEncounter,
+  applyDamageToCombatant,
+  endCombat,
+  healCombatant,
+  mutateEncounter,
+  startCombat,
+  toggleCondition,
+} from '../server/combat';
 import { anthropic, MODELS } from './claude';
 import { respondAsCompanion } from './companion-agent';
 import { GM_TOOLS, type RecordEntityInput, type RequestRollInput } from './tools';
@@ -38,6 +49,9 @@ export type GmEvent =
   | { type: 'memory_recalled'; query: string; result: string }
   | { type: 'entity_recorded'; kind: string; name: string }
   | { type: 'companion'; characterId: string; characterName: string; content: string }
+  | { type: 'combat_started'; combatId: string }
+  | { type: 'combat_ended' }
+  | { type: 'combat_update' }
   | { type: 'done' }
   | { type: 'error'; message: string };
 
@@ -135,6 +149,87 @@ async function executeTool(
     case 'prompt_companion': {
       const input = block.input as { character_id: string; hint?: string };
       return executeCompanion(input, sessionId);
+    }
+    case 'start_combat': {
+      const input = block.input as {
+        npcs: Array<{ name: string; ac: number; hp: number; dex_mod?: number }>;
+      };
+      const supabase = createSupabaseServiceClient();
+      const { data: session } = await supabase
+        .from('sessions')
+        .select('campaign_id')
+        .eq('id', sessionId)
+        .single();
+      if (!session) return { result: { error: 'Session introuvable' }, events: [] };
+      const { data: characters } = await supabase
+        .from('characters')
+        .select('*')
+        .eq('campaign_id', session.campaign_id);
+      const combat = await startCombat({
+        sessionId,
+        npcs: input.npcs.map((n) => ({
+          name: n.name,
+          ac: n.ac,
+          hp: n.hp,
+          dexMod: n.dex_mod,
+        })),
+        characters: (characters ?? []) as CharacterRow[],
+      });
+      return {
+        result: {
+          combat_id: combat.id,
+          round: combat.round,
+          order: combat.initiative_order,
+          combatants: combat.combatants,
+        },
+        events: [{ type: 'combat_started', combatId: combat.id }],
+      };
+    }
+    case 'apply_damage': {
+      const input = block.input as { combatant_id: string; amount: number };
+      const enc = await activeEncounter(sessionId);
+      if (!enc) return { result: { error: 'Aucun combat actif' }, events: [] };
+      const next = await mutateEncounter(enc.id, (e) =>
+        input.amount >= 0
+          ? applyDamageToCombatant(e, input.combatant_id, input.amount)
+          : healCombatant(e, input.combatant_id, -input.amount),
+      );
+      return {
+        result: { combatants: next.combatants },
+        events: [{ type: 'combat_update' }],
+      };
+    }
+    case 'apply_condition': {
+      const input = block.input as {
+        combatant_id: string;
+        condition: ConditionType;
+        add: boolean;
+        duration_rounds?: number;
+      };
+      const enc = await activeEncounter(sessionId);
+      if (!enc) return { result: { error: 'Aucun combat actif' }, events: [] };
+      const next = await mutateEncounter(enc.id, (e) =>
+        toggleCondition(e, input.combatant_id, input.condition, input.add, input.duration_rounds),
+      );
+      return {
+        result: { combatants: next.combatants },
+        events: [{ type: 'combat_update' }],
+      };
+    }
+    case 'next_turn': {
+      const enc = await activeEncounter(sessionId);
+      if (!enc) return { result: { error: 'Aucun combat actif' }, events: [] };
+      const next = await mutateEncounter(enc.id, advanceTurnEncounter);
+      return {
+        result: { round: next.round, current_turn_index: next.current_turn_index },
+        events: [{ type: 'combat_update' }],
+      };
+    }
+    case 'end_combat': {
+      const enc = await activeEncounter(sessionId);
+      if (!enc) return { result: { error: 'Aucun combat actif' }, events: [] };
+      await endCombat(enc.id);
+      return { result: { ok: true }, events: [{ type: 'combat_ended' }] };
     }
     default:
       return { result: { error: `Unknown tool: ${block.name}` }, events: [] };
