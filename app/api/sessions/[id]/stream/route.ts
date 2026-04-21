@@ -12,7 +12,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const { id: sessionId } = await params;
   const url = new URL(req.url);
   const userMessage = url.searchParams.get('message') ?? '';
-  if (!userMessage) return new Response('missing message', { status: 400 });
+  const trigger = url.searchParams.get('trigger') ?? '';
+  if (!userMessage && trigger !== 'companion_spoke') {
+    return new Response('missing message', { status: 400 });
+  }
 
   const supabase = await createSupabaseServerClient();
   const { data: user } = await supabase.auth.getUser();
@@ -49,9 +52,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
       const fullText: string[] = [];
       try {
+        const effectiveMessage =
+          trigger === 'companion_spoke'
+            ? "(Un compagnon vient de parler ci-dessus. Réagis brièvement en tant que MJ : décris la réaction des autres autour du feu, ou enchaîne la scène, sans répéter ce qu'il a dit.)"
+            : userMessage;
         for await (const ev of runGmTurn({
           sessionId,
-          userMessage,
+          userMessage: effectiveMessage,
           history: (history ?? []) as MessageRow[],
           player,
           companions,

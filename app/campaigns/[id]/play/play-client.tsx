@@ -87,7 +87,18 @@ export function PlayClient({
     });
   }
 
+  async function streamGmFollowUp(time: string) {
+    return runGmStream(time, `/api/sessions/${sessionId}/stream?trigger=companion_spoke`);
+  }
+
   async function streamGm(userMessage: string, time: string) {
+    return runGmStream(
+      time,
+      `/api/sessions/${sessionId}/stream?message=${encodeURIComponent(userMessage)}`,
+    );
+  }
+
+  async function runGmStream(time: string, url: string) {
     setTyping(true);
     const gmId = `gm-${Date.now()}`;
     setMessages((m) => [
@@ -95,7 +106,6 @@ export function PlayClient({
       { id: gmId, authorKind: 'gm', authorName: 'Le Conteur', content: '', time, streaming: true },
     ]);
     try {
-      const url = `/api/sessions/${sessionId}/stream?message=${encodeURIComponent(userMessage)}`;
       const response = await fetch(url);
       if (!response.ok || !response.body) throw new Error('Stream indisponible');
       const reader = response.body.getReader();
@@ -278,7 +288,7 @@ export function PlayClient({
                 const comp = companions.find((c) => c.id === characterId);
                 if (!comp) return;
                 setTyping(true);
-                promptCompanion({ sessionId, characterId }).then((res) => {
+                promptCompanion({ sessionId, characterId }).then(async (res) => {
                   setTyping(false);
                   const content = res.ok ? res.content : undefined;
                   if (!content) return;
@@ -297,6 +307,7 @@ export function PlayClient({
                       color: '#c47a3a',
                     },
                   ]);
+                  await streamGmFollowUp(now);
                 });
               }}
             />

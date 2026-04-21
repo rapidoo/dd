@@ -75,13 +75,24 @@ export interface DiceRollRecord {
  * yields { type: 'done' }.
  */
 export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
+  const companionNameById = new Map(input.companions.map((c) => [c.id, c.name]));
   const messages: Anthropic.Messages.MessageParam[] = input.history
-    .filter((m) => m.author_kind === 'user' || m.author_kind === 'gm')
-    .map((m) => ({
-      role: m.author_kind === 'user' ? 'user' : 'assistant',
-      content: m.content,
-    }));
-  messages.push({ role: 'user', content: input.userMessage });
+    .filter(
+      (m) => m.author_kind === 'user' || m.author_kind === 'gm' || m.author_kind === 'character',
+    )
+    .map((m) => {
+      if (m.author_kind === 'gm') {
+        return { role: 'assistant' as const, content: m.content };
+      }
+      if (m.author_kind === 'character') {
+        const name = (m.author_id && companionNameById.get(m.author_id)) || 'Compagnon';
+        return { role: 'user' as const, content: `(${name} dit) ${m.content}` };
+      }
+      return { role: 'user' as const, content: m.content };
+    });
+  if (input.userMessage && input.userMessage.trim().length > 0) {
+    messages.push({ role: 'user', content: input.userMessage });
+  }
 
   const systemPrompt = buildSystemPrompt(input.player, input.companions);
 
