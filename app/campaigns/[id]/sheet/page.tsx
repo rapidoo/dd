@@ -10,25 +10,33 @@ import { requireUser } from '../../../../lib/server/auth';
 import { getCampaign } from '../../../../lib/server/campaigns';
 import { HPControls } from './hp-controls';
 
-export default async function SheetPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function SheetPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ character?: string }>;
+}) {
   await requireUser();
   const { id } = await params;
+  const { character: selectedId } = await searchParams;
   const campaign = await getCampaign(id);
   if (!campaign) notFound();
+
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase
     .from('characters')
     .select('*')
     .eq('campaign_id', id)
-    .eq('is_ai', false)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle<CharacterRow>();
-  if (!data) {
+    .order('is_ai', { ascending: true })
+    .order('created_at', { ascending: true });
+  const characters = (data ?? []) as CharacterRow[];
+
+  if (characters.length === 0) {
     return (
       <main className="mx-auto max-w-2xl px-6 py-12 text-text">
         <p className="font-narr italic text-text-mute">
-          Pas encore de personnage joueur dans cette campagne.
+          Pas encore de personnage dans cette campagne.
         </p>
         <Link href={`/campaigns/${id}/characters/new`} className="text-gold underline">
           Créer un personnage →
@@ -36,7 +44,13 @@ export default async function SheetPage({ params }: { params: Promise<{ id: stri
       </main>
     );
   }
-  const character = data;
+
+  const character =
+    (selectedId && characters.find((c) => c.id === selectedId)) ||
+    characters.find((c) => !c.is_ai) ||
+    characters[0];
+  if (!character) notFound();
+
   const species = SPECIES[character.species]?.name ?? character.species;
   const className = CLASSES[character.class]?.name ?? character.class;
   const prof = proficiencyBonus(character.level);
@@ -49,6 +63,10 @@ export default async function SheetPage({ params }: { params: Promise<{ id: stri
     ['CHA', character.cha],
   ];
   const slots = character.spell_slots ?? {};
+  const persona =
+    typeof character.persona === 'object' && character.persona && 'notes' in character.persona
+      ? String((character.persona as { notes?: unknown }).notes ?? '')
+      : '';
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-6 py-12 text-text">
@@ -58,11 +76,37 @@ export default async function SheetPage({ params }: { params: Promise<{ id: stri
       >
         ← Retour à la campagne
       </Link>
+
+      <section className="flex flex-wrap items-center gap-2">
+        {characters.map((c) => {
+          const active = c.id === character.id;
+          return (
+            <Link
+              key={c.id}
+              href={`/campaigns/${id}/sheet?character=${c.id}`}
+              className={`inline-flex items-center gap-2 border px-3 py-1.5 text-[11px] uppercase tracking-[0.15em] transition-colors ${
+                active
+                  ? 'border-gold bg-[rgba(212,166,76,0.12)] text-gold-bright'
+                  : 'border-line text-text-mute hover:border-gold/60 hover:text-text'
+              }`}
+            >
+              <span>{c.is_ai ? '◉' : '⚜'}</span>
+              <span className="font-display">{c.name}</span>
+              <span className="text-text-faint">· {c.is_ai ? 'allié' : 'joueur'}</span>
+            </Link>
+          );
+        })}
+      </section>
+
       <header>
         <p className="font-display text-xs uppercase tracking-[0.3em] text-gold">
           {species} · {className} {character.level}
+          {character.is_ai && <span className="ml-2 text-text-mute">· compagnon IA</span>}
         </p>
         <h1 className="font-narr text-4xl text-gold-bright">{character.name}</h1>
+        {persona && (
+          <p className="mt-2 max-w-2xl font-narr text-base italic text-text-mid">{persona}</p>
+        )}
       </header>
 
       <section className="grid gap-4 md:grid-cols-3">

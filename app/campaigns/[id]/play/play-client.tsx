@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { DiceCard, type DiceCardProps } from '../../../../components/session/dice-card';
 import { Message, TypingIndicator } from '../../../../components/session/message';
@@ -299,6 +300,7 @@ export function PlayClient({
 
           {(player || companions.length > 0) && (
             <PlayerPanel
+              campaignId={campaignId}
               player={player}
               companions={companions}
               onPromptCompanion={(characterId) => {
@@ -386,10 +388,12 @@ const COMPANION_COLORS = ['#c47a3a', '#a86a9a', '#4a6a8a', '#6a7a3a', '#6a5a8a']
 const COMPANION_GLYPHS = ['⚔', '♪', '❋', '✦', '◈'];
 
 function PlayerPanel({
+  campaignId,
   player,
   companions,
   onPromptCompanion,
 }: {
+  campaignId: string;
   player: CharacterRow | null;
   companions: CharacterRow[];
   onPromptCompanion: (characterId: string) => void;
@@ -438,21 +442,26 @@ function PlayerPanel({
               </div>
             );
             return (
-              <li key={m.row.id} className="border-b border-line last:border-b-0">
-                {isAi ? (
+              <li
+                key={m.row.id}
+                className="flex flex-col gap-2 border-b border-line py-2 last:border-b-0"
+              >
+                <Link
+                  href={`/campaigns/${campaignId}/sheet?character=${m.row.id}`}
+                  className="group -mx-1 rounded-sm px-1 transition-colors hover:bg-[rgba(212,166,76,0.06)]"
+                  title="Voir la fiche"
+                >
+                  {row}
+                </Link>
+                {isAi && (
                   <button
                     type="button"
                     onClick={() => onPromptCompanion(m.row.id)}
                     title="Lui passer la parole"
-                    className="group flex w-full flex-col gap-2 py-2 text-left transition-colors hover:bg-[rgba(212,166,76,0.06)]"
+                    className="inline-flex w-full items-center justify-center gap-2 border border-gold/60 bg-gradient-to-b from-gold-bright/15 to-gold/10 px-3 py-1.5 font-ui text-[11px] font-semibold uppercase tracking-[0.2em] text-gold-bright transition-colors hover:border-gold hover:bg-[rgba(212,166,76,0.15)]"
                   >
-                    {row}
-                    <span className="inline-flex items-center justify-center gap-2 border border-gold/60 bg-gradient-to-b from-gold-bright/15 to-gold/10 px-3 py-1.5 font-ui text-[11px] font-semibold uppercase tracking-[0.2em] text-gold-bright transition-colors group-hover:border-gold group-hover:bg-[rgba(212,166,76,0.15)]">
-                      ▸ Parler
-                    </span>
+                    ▸ Parler
                   </button>
-                ) : (
-                  row
                 )}
               </li>
             );
