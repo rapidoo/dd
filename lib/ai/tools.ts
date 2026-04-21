@@ -182,6 +182,33 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
           type: 'string',
           description: 'Description courte (effet, propriétés, origine).',
         },
+        weapon: {
+          type: 'object',
+          description:
+            'Obligatoire quand type="weapon". Permet de calculer le bonus d\'attaque sur la fiche. Omettre pour une arme purement narrative (décor, fêlée, symbolique).',
+          properties: {
+            damage_dice: {
+              type: 'string',
+              description: 'Dés de dégâts sans modificateur, ex "1d8", "2d6".',
+            },
+            damage_type: {
+              type: 'string',
+              description:
+                'Type de dégâts en français : contondant, perforant, tranchant, feu, froid, foudre, poison, acide, nécrotique, radiant, force, psychique, tonnerre.',
+            },
+            ability: {
+              type: 'string',
+              enum: ['str', 'dex', 'finesse'],
+              description:
+                'Caractéristique : "str" (mêlée standard), "dex" (DEX forcée), "finesse" (STR ou DEX au choix, le meilleur). Laisser vide pour les armes à distance (auto DEX via ranged).',
+            },
+            ranged: {
+              type: 'boolean',
+              description: 'true pour les armes à distance (arc, arbalète) — force DEX.',
+            },
+          },
+          required: ['damage_dice'],
+        },
       },
       required: ['character_id', 'name', 'qty'],
     },

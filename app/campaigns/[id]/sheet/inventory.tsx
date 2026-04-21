@@ -1,3 +1,5 @@
+import type { CharacterRow } from '../../../../lib/db/types';
+import { weaponAttack } from '../../../../lib/rules/weapon-attack';
 import type { Currency, InventoryItem } from '../../../../lib/server/inventory-actions';
 
 const TYPE_LABEL: Record<string, string> = {
@@ -8,6 +10,55 @@ const TYPE_LABEL: Record<string, string> = {
   treasure: 'Trésor',
   misc: 'Divers',
 };
+
+export function WeaponsSection({
+  character,
+  inventory,
+}: {
+  character: CharacterRow;
+  inventory: InventoryItem[];
+}) {
+  const weapons = inventory.filter((i) => i.type === 'weapon');
+  if (weapons.length === 0) return null;
+  return (
+    <section className="border border-line bg-card p-5">
+      <p className="mb-3 font-display text-[10px] uppercase tracking-[0.25em] text-gold">⚔ Armes</p>
+      <ul className="divide-y divide-line border border-line">
+        {weapons.map((w) => {
+          const attack = weaponAttack(character, w.weapon ?? null);
+          return (
+            <li key={w.id} className="flex items-center gap-3 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-narr text-base text-text">
+                  <span className="font-semibold text-gold-bright">×{w.qty}</span> {w.name}
+                </p>
+                {w.description && (
+                  <p className="font-narr text-[11px] italic text-text-mute">{w.description}</p>
+                )}
+              </div>
+              {attack ? (
+                <div className="flex shrink-0 items-baseline gap-3 font-mono text-[12px]">
+                  <span className="font-semibold text-gold-bright">{attack.toHit}</span>
+                  <span className="text-text">{attack.damage}</span>
+                  {attack.damageType && (
+                    <span className="text-text-faint">{attack.damageType}</span>
+                  )}
+                </div>
+              ) : (
+                <span
+                  className="font-mono text-[11px] text-text-faint"
+                  title="Arme sans statistiques mécaniques — narrative uniquement."
+                >
+                  —
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
 
 export function InventorySection({ inventory }: { inventory: InventoryItem[] }) {
   return (

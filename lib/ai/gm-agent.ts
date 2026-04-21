@@ -5,6 +5,7 @@ import type { CharacterRow, MessageRow } from '../db/types';
 import { type EntityKind, recallEntities, upsertEntity } from '../neo4j/queries';
 import { parseDiceExpression, rollD20, rollExpression } from '../rules/dice';
 import { CONDITION_TYPES, type ConditionType } from '../rules/types';
+import { weaponAttack } from '../rules/weapon-attack';
 import {
   activeEncounter,
   advanceTurnEncounter,
@@ -15,6 +16,7 @@ import {
   startCombat,
   toggleCondition,
 } from '../server/combat';
+import type { InventoryItem } from '../server/inventory-actions';
 import { anthropic, MODELS } from './claude';
 import { respondAsCompanion } from './companion-agent';
 import { campaignIdOfSession, characterInSession, combatantBelongsToSession } from './tenant-guard';
@@ -54,7 +56,8 @@ Magie et repos :
 - Quand la fiction décrit un bivouac, une veille, une nuit de sommeil : appelle trigger_rest(character_id, kind). Repos court (1h, petite pause) = "short" → regagne 1d[DV]+CON. Repos long (8h, nuit complète) = "long" → PV max, tous les emplacements restaurés, exhaustion -1.
 
 Butin, bourse et équipement — RÈGLE ABSOLUE :
-- Dès que tu mentionnes un objet ramassé, trouvé, acheté, donné ou perdu, appelle grant_item(character_id, name, qty, type?, description?). Sinon l'inventaire du joueur n'est pas mis à jour et le butin est oublié.
+- Dès que tu mentionnes un objet ramassé, trouvé, acheté, donné ou perdu, appelle grant_item(character_id, name, qty, type?, description?, weapon?). Sinon l'inventaire du joueur n'est pas mis à jour et le butin est oublié.
+- Quand tu donnes une ARME, remplis toujours le paramètre weapon={damage_dice, damage_type, ability, ranged?} — sinon la fiche n'affiche pas le bonus d'attaque. Références courantes : dague "1d4"/perforant/finesse ; épée courte "1d6"/perforant/finesse ; épée longue "1d8"/tranchant/str ; hache d'armes "1d8"/tranchant/str ; marteau de guerre "1d8"/contondant/str ; arc court "1d6"/perforant/ranged=true ; arbalète légère "1d8"/perforant/ranged=true. Les armes purement décoratives/narratives (bâton brisé, épée de cérémonie) peuvent omettre weapon.
 - Dès que tu mentionnes des pièces (or, argent, cuivre, électrum, platine) gagnées ou dépensées, appelle adjust_currency(character_id, cp/sp/ep/gp/pp). Positif = gain, négatif = perte.
 - Exemple complet d'un pillage : "Vous trouvez 32 po, 4 pa, une épée courte, une fiole de poison" → 1) adjust_currency(PJ, gp=32, sp=4) ; 2) grant_item(PJ, "Épée courte", 1, "weapon") ; 3) grant_item(PJ, "Fiole de poison", 1, "consumable", "Puissant. À manier avec soin.").
 - Si plusieurs PJ/compagnons se partagent le butin, attribue logiquement (le commerçant nain prend l'or, le druide la fiole) ou répartis équitablement ; appelle les outils autant de fois que nécessaire, un par bénéficiaire.
@@ -262,6 +265,14 @@ const grantItemSchema = z.object({
   qty: z.number().int().min(-999).max(999),
   type: z.enum(ITEM_TYPES).optional(),
   description: z.string().trim().max(400).optional(),
+  weapon: z
+    .object({
+      damage_dice: z.string().regex(/^\s*\d*d(4|6|8|10|12|20|100)(\s*[+-]\s*\d+)?\s*$/i),
+      damage_type: z.string().trim().max(40).optional(),
+      ability: z.enum(['str', 'dex', 'finesse']).optional(),
+      ranged: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 const adjustCurrencySchema = z.object({
@@ -536,8 +547,12 @@ function buildSystemPrompt(
   const partyLines: string[] = [];
   if (player) {
     partyLines.push(
-      `- Le joueur incarne ${player.name} (${player.species} · ${player.class} niv. ${player.level}). PV ${player.current_hp}/${player.max_hp}, CA ${player.ac}.`,
+      `- Le joueur incarne ${player.name} (id="${player.id}", ${player.species} · ${player.class} niv. ${player.level}). PV ${player.current_hp}/${player.max_hp}, CA ${player.ac}.`,
     );
+    const weaponLines = describeWeapons(player);
+    if (weaponLines.length > 0) {
+      partyLines.push(`  · Armes : ${weaponLines.join(' ; ')}`);
+    }
   }
   if (companions.length > 0) {
     partyLines.push(
@@ -718,6 +733,19 @@ const ROLL_DELEGATION_PATTERNS: RegExp[] = [
   /(^|\s)(à|a)\s+toi\s+de\s+(lancer|jeter)\b/i,
 ];
 
+function describeWeapons(character: CharacterRow): string[] {
+  const items = (character.inventory as InventoryItem[] | null) ?? [];
+  const weapons = items.filter((i) => i.type === 'weapon' && i.weapon?.damageDice);
+  const result: string[] = [];
+  for (const w of weapons) {
+    const attack = weaponAttack(character, w.weapon ?? null);
+    if (!attack) continue;
+    const type = attack.damageType ? ` ${attack.damageType}` : '';
+    result.push(`${w.name} (att ${attack.toHit} · dmg ${attack.damage}${type})`);
+  }
+  return result;
+}
+
 export function hasRollDelegation(text: string): boolean {
   if (!text || text.length < 5) return false;
   return ROLL_DELEGATION_PATTERNS.some((re) => re.test(text));
@@ -787,20 +815,18 @@ async function toggleConditionOnCharacter(
   };
 }
 
-interface InventoryItem {
-  id: string;
-  name: string;
-  qty: number;
-  type?: 'weapon' | 'armor' | 'tool' | 'consumable' | 'treasure' | 'misc';
-  description?: string;
-}
-
 async function grantItemToCharacter(input: {
   character_id: string;
   name: string;
   qty: number;
   type?: 'weapon' | 'armor' | 'tool' | 'consumable' | 'treasure' | 'misc';
   description?: string;
+  weapon?: {
+    damage_dice: string;
+    damage_type?: string;
+    ability?: 'str' | 'dex' | 'finesse';
+    ranged?: boolean;
+  };
 }): Promise<{ result: unknown; events: GmEvent[] }> {
   const supabase = createSupabaseServiceClient();
   const { data: character } = await supabase
@@ -814,10 +840,20 @@ async function grantItemToCharacter(input: {
   const existing = items.find(
     (i) => i.name.toLowerCase() === input.name.toLowerCase() && (i.type ?? 'misc') === type,
   );
+  const weaponMeta = input.weapon
+    ? {
+        damageDice: input.weapon.damage_dice,
+        damageType: input.weapon.damage_type,
+        ability: input.weapon.ability,
+        ranged: input.weapon.ranged,
+      }
+    : undefined;
   let next: InventoryItem[];
   if (existing) {
     next = items
-      .map((i) => (i === existing ? { ...i, qty: i.qty + input.qty } : i))
+      .map((i) =>
+        i === existing ? { ...i, qty: i.qty + input.qty, weapon: weaponMeta ?? i.weapon } : i,
+      )
       .filter((i) => i.qty > 0);
   } else if (input.qty > 0) {
     next = [
@@ -828,6 +864,7 @@ async function grantItemToCharacter(input: {
         qty: input.qty,
         type,
         description: input.description,
+        weapon: weaponMeta,
       },
     ];
   } else {

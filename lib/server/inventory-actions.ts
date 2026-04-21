@@ -14,6 +14,17 @@ export interface InventoryItem {
   type?: 'weapon' | 'armor' | 'tool' | 'consumable' | 'treasure' | 'misc';
   description?: string;
   equipped?: boolean;
+  /**
+   * Weapon metadata. Only meaningful when type === 'weapon'. Absent on
+   * narrative weapons (staff without stats, broken sword…), which the sheet
+   * displays with a "?" to-hit instead of a bonus.
+   */
+  weapon?: {
+    damageDice: string;
+    damageType?: string;
+    ability?: 'str' | 'dex' | 'finesse';
+    ranged?: boolean;
+  };
 }
 
 export type Currency = { cp: number; sp: number; ep: number; gp: number; pp: number };
