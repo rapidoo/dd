@@ -50,7 +50,7 @@ export function PlayClient({
     initialMessages.map((m) => toDisplay(m, companionMap)),
   );
   const [input, setInput] = useState('');
-  const [typing, setTyping] = useState(false);
+  const [typing, setTyping] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -106,7 +106,7 @@ export function PlayClient({
   }
 
   async function runGmStream(time: string, url: string) {
-    setTyping(true);
+    setTyping('Le Conteur');
     const gmId = `gm-${Date.now()}`;
     setMessages((m) => [
       ...m,
@@ -186,7 +186,7 @@ export function PlayClient({
         ),
       );
     } finally {
-      setTyping(false);
+      setTyping(null);
       setMessages((m) =>
         m.map((x) => (x.kind === 'msg' && x.id === gmId ? { ...x, streaming: false } : x)),
       );
@@ -257,7 +257,7 @@ export function PlayClient({
                   />
                 ),
               )}
-              {typing && <TypingIndicator who="Le Conteur" />}
+              {typing && <TypingIndicator who={typing} />}
             </div>
 
             <div className="flex items-end gap-2 border-t border-line px-8 py-4">
@@ -271,11 +271,11 @@ export function PlayClient({
                   }
                 }}
                 rows={2}
-                disabled={isPending || typing}
+                disabled={isPending || typing !== null}
                 placeholder="Décris ce que tu fais…"
                 className="flex-1 resize-none rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold disabled:opacity-60"
               />
-              <BtnPrimary icon="▸" onClick={send} disabled={isPending || typing}>
+              <BtnPrimary icon="▸" onClick={send} disabled={isPending || typing !== null}>
                 Envoyer
               </BtnPrimary>
             </div>
@@ -288,9 +288,9 @@ export function PlayClient({
               onPromptCompanion={(characterId) => {
                 const comp = companions.find((c) => c.id === characterId);
                 if (!comp) return;
-                setTyping(true);
+                setTyping(comp.name);
                 promptCompanion({ sessionId, characterId }).then(async (res) => {
-                  setTyping(false);
+                  setTyping(null);
                   const content = res.ok ? res.content : undefined;
                   if (!content) return;
                   const now = new Date().toLocaleTimeString('fr-FR', {
