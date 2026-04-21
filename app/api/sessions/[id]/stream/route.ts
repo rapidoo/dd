@@ -21,31 +21,31 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const { data: user } = await supabase.auth.getUser();
   if (!user.user) return new Response('unauthorized', { status: 401 });
 
-  const { data: history } = await supabase
-    .from('messages')
-    .select('*')
-    .eq('session_id', sessionId)
-    .order('created_at', { ascending: true });
-
+  // Ownership check — sessions is RLS-gated so this returns null if the user
+  // does not own the campaign. Treat null as 404 to avoid leaking session
+  // existence and to block any downstream service-role writes.
   const { data: session } = await supabase
     .from('sessions')
     .select('campaign_id')
     .eq('id', sessionId)
     .maybeSingle();
-  const { data: characters } = session
-    ? await supabase
-        .from('characters')
-        .select('*')
-        .eq('campaign_id', session.campaign_id)
-        .order('created_at', { ascending: true })
-    : { data: [] };
-  const { data: campaign } = session
-    ? await supabase
-        .from('campaigns')
-        .select('world_summary')
-        .eq('id', session.campaign_id)
-        .maybeSingle<{ world_summary: string | null }>()
-    : { data: null };
+  if (!session) return new Response('Not found', { status: 404 });
+
+  const { data: history } = await supabase
+    .from('messages')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+  const { data: characters } = await supabase
+    .from('characters')
+    .select('*')
+    .eq('campaign_id', session.campaign_id)
+    .order('created_at', { ascending: true });
+  const { data: campaign } = await supabase
+    .from('campaigns')
+    .select('world_summary')
+    .eq('id', session.campaign_id)
+    .maybeSingle<{ world_summary: string | null }>();
   const all = (characters ?? []) as CharacterRow[];
   const player = all.find((c) => !c.is_ai) ?? null;
   const companions = all.filter((c) => c.is_ai);

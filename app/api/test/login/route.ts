@@ -13,7 +13,11 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: Request) {
-  if (process.env.ALLOW_TEST_LOGIN !== '1') {
+  // Belt & braces: flag + dev build + not Vercel prod. Any one wrong → hard 404.
+  const flag = process.env.ALLOW_TEST_LOGIN === '1';
+  const isDev = process.env.NODE_ENV !== 'production';
+  const notVercelProd = process.env.VERCEL_ENV !== 'production';
+  if (!(flag && isDev && notVercelProd)) {
     return new Response('Not found', { status: 404 });
   }
   const json = await req.json().catch(() => null);

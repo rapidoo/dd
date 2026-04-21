@@ -16,6 +16,7 @@ import {
 } from '../server/combat';
 import { anthropic, MODELS } from './claude';
 import { respondAsCompanion } from './companion-agent';
+import { campaignIdOfSession, characterInSession, combatantBelongsToSession } from './tenant-guard';
 import { GM_TOOLS, type RecordEntityInput, type RequestRollInput } from './tools';
 
 const GM_SYSTEM_PROMPT = `Tu es "Le Conteur", Maître du Donjon d'une partie de Donjons & Dragons 5e (SRD 5.1).
@@ -168,7 +169,7 @@ async function executeTool(
       return executeRoll(block.input as RequestRollInput, sessionId);
     case 'recall_memory': {
       const q = (block.input as { query: string }).query;
-      const campaignId = await campaignForSession(sessionId);
+      const campaignId = await campaignIdOfSession(sessionId);
       if (!campaignId) return { result: { context: 'Session invalide.' }, events: [] };
       try {
         const entities = await recallEntities(campaignId, q);
@@ -194,7 +195,7 @@ async function executeTool(
     }
     case 'record_entity': {
       const input = block.input as RecordEntityInput;
-      const campaignId = await campaignForSession(sessionId);
+      const campaignId = await campaignIdOfSession(sessionId);
       if (!campaignId) return { result: { ok: false, error: 'Session invalide.' }, events: [] };
       const supabase = createSupabaseServiceClient();
       const { data: row } = await supabase
@@ -233,6 +234,9 @@ async function executeTool(
         type?: 'weapon' | 'armor' | 'tool' | 'consumable' | 'treasure' | 'misc';
         description?: string;
       };
+      if (!(await characterInSession(sessionId, input.character_id))) {
+        return { result: { error: 'Cible hors campagne' }, events: [] };
+      }
       return await grantItemToCharacter(input);
     }
     case 'adjust_currency': {
@@ -244,10 +248,16 @@ async function executeTool(
         gp?: number;
         pp?: number;
       };
+      if (!(await characterInSession(sessionId, input.character_id))) {
+        return { result: { error: 'Cible hors campagne' }, events: [] };
+      }
       return await adjustCharacterCurrency(input);
     }
     case 'prompt_companion': {
       const input = block.input as { character_id: string; hint?: string };
+      if (!(await characterInSession(sessionId, input.character_id))) {
+        return { result: { error: 'Cible hors campagne' }, events: [] };
+      }
       return executeCompanion(input, sessionId);
     }
     case 'start_combat': {
@@ -287,6 +297,9 @@ async function executeTool(
     }
     case 'apply_damage': {
       const input = block.input as { combatant_id: string; amount: number };
+      if (!(await combatantBelongsToSession(sessionId, input.combatant_id))) {
+        return { result: { error: 'Cible hors campagne' }, events: [] };
+      }
       const enc = await activeEncounter(sessionId);
       if (enc) {
         const next = await mutateEncounter(enc.id, (e) =>
@@ -309,6 +322,9 @@ async function executeTool(
         add: boolean;
         duration_rounds?: number;
       };
+      if (!(await combatantBelongsToSession(sessionId, input.combatant_id))) {
+        return { result: { error: 'Cible hors campagne' }, events: [] };
+      }
       const enc = await activeEncounter(sessionId);
       if (enc) {
         const next = await mutateEncounter(enc.id, (e) =>
@@ -384,16 +400,6 @@ ${worldBlock}
 ${partyLines.join('\n')}
 
 Quand un compagnon est présent, pense à lui laisser la parole régulièrement via prompt_companion — décris une scène, puis passe-lui le micro (indique character_id et éventuellement un hint).`;
-}
-
-async function campaignForSession(sessionId: string): Promise<string | null> {
-  const supabase = createSupabaseServiceClient();
-  const { data } = await supabase
-    .from('sessions')
-    .select('campaign_id')
-    .eq('id', sessionId)
-    .maybeSingle();
-  return data?.campaign_id ?? null;
 }
 
 async function executeCompanion(
