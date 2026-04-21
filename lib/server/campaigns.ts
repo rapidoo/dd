@@ -62,10 +62,18 @@ export async function createCampaign(
     return { ok: false, error: 'Module inconnu.' };
   }
 
-  // Seed the world summary from the template so the GM has the pitch ready.
-  const worldSummary = template
-    ? `${template.title} — ${template.tagline}\n\n${template.summary}\n\nNiveaux: ${template.levelRange} · Difficulté: ${template.difficulty} · Tons: ${template.tones.join(', ')}\nÉquipe conseillée: ${template.recommendedParty}`
-    : null;
+  // Seed the world summary from the template / pitch so the GM has context.
+  const pitch = parsed.data.settingPitch?.trim() ?? '';
+  let worldSummary: string | null = null;
+  if (template) {
+    worldSummary = `${template.title} — ${template.tagline}\n\n${template.summary}\n\nNiveaux: ${template.levelRange} · Difficulté: ${template.difficulty} · Tons: ${template.tones.join(', ')}\nÉquipe conseillée: ${template.recommendedParty}\n\nMode: module pré-écrit. Reste fidèle au pitch ci-dessus et à l'univers décrit.`;
+  } else if (parsed.data.settingMode === 'homebrew' && pitch) {
+    worldSummary = `Univers décrit par le joueur :\n${pitch}\n\nMode: homebrew. RESPECTE la description du joueur à la lettre. N'invente pas de lieux, PNJ ou ambiances qui contrediraient ses indications. Si un détail manque, demande-lui avant de décider.`;
+  } else if (parsed.data.settingMode === 'generated') {
+    worldSummary = `Thème de départ donné par le joueur :\n${pitch || '(aucun, improvise un thème cozy dark fantasy)'}\n\nMode: monde généré. Tu as carte blanche pour inventer lieux, factions, PNJ et premier accrochage à partir de ce thème. Commence la toute première session par une scène d'ouverture immersive et mémorable, puis laisse le joueur réagir.`;
+  } else if (pitch) {
+    worldSummary = pitch;
+  }
 
   const user = await requireUser();
   const supabase = await createSupabaseServerClient();

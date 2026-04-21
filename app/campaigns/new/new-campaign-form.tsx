@@ -14,20 +14,22 @@ const MODES: Array<{
 }> = [
   {
     value: 'homebrew',
-    title: 'Monde libre',
-    description: "Décris toi-même l'univers dans les marges.",
+    title: 'Ton monde',
+    description:
+      "Décris précisément l'univers, les lieux, le ton. Le Conteur respecte ta description sans l'inventer.",
     glyph: '✎',
   },
   {
     value: 'module',
     title: 'Module pré-écrit',
-    description: 'Pioche dans une aventure existante (bientôt).',
+    description: 'Pioche dans une aventure existante — pitch, intrigue et PNJ déjà prêts.',
     glyph: '❋',
   },
   {
     value: 'generated',
     title: 'Monde généré',
-    description: 'Donne un pitch et le MJ-IA en fait un monde.',
+    description:
+      'Donne juste un thème court (« cité sous la glace »). Le Conteur invente le reste à partir de là.',
     glyph: '✧',
   },
 ];
@@ -139,16 +141,22 @@ export function NewCampaignForm() {
         </section>
       )}
 
-      <label className="flex flex-col gap-1 text-xs uppercase tracking-[0.2em] text-text-mute">
-        Pitch optionnel
-        <textarea
-          name="settingPitch"
-          rows={4}
-          maxLength={2000}
-          className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold"
-          placeholder="Quelques lignes pour inspirer le MJ — lieux, tonalité, ambiance…"
-        />
-      </label>
+      {settingMode !== 'module' && (
+        <label className="flex flex-col gap-1 text-xs uppercase tracking-[0.2em] text-text-mute">
+          {settingMode === 'homebrew' ? 'Description de ton univers' : 'Thème de départ'}
+          <textarea
+            name="settingPitch"
+            rows={settingMode === 'homebrew' ? 6 : 3}
+            maxLength={2000}
+            className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold"
+            placeholder={
+              settingMode === 'homebrew'
+                ? "Décris les lieux, les factions, l'ambiance, les règles propres à ton monde. Le Conteur suivra ta description à la lettre."
+                : 'Ex. : « cité sous la glace dirigée par une guilde de marchands de rêves » — quelques mots suffisent.'
+            }
+          />
+        </label>
+      )}
 
       {state && !state.ok && !state.fieldErrors && (
         <p className="text-sm text-blood">{state.error}</p>
