@@ -56,13 +56,10 @@ Magie et repos :
 - Quand un PJ ou compagnon lance un SORT qui coûte un emplacement (pas les cantrips niv. 0) : appelle cast_spell(character_id, spell_level, spell_name). Si l'outil renvoie "Aucun emplacement disponible", fais échouer le sort dans la fiction.
 - Quand la fiction décrit un bivouac, une veille, une nuit de sommeil : appelle trigger_rest(character_id, kind). Repos court (1h, petite pause) = "short" → regagne 1d[DV]+CON. Repos long (8h, nuit complète) = "long" → PV max, tous les emplacements restaurés, exhaustion -1.
 
-Butin, bourse et équipement — RÈGLE ABSOLUE :
-- Dès que tu mentionnes un objet ramassé, trouvé, acheté, donné ou perdu, appelle grant_item(character_id, name, qty, type?, description?, weapon?). Sinon l'inventaire du joueur n'est pas mis à jour et le butin est oublié.
-- Quand tu donnes une ARME, remplis toujours le paramètre weapon={damage_dice, damage_type, ability, ranged?} — sinon la fiche n'affiche pas le bonus d'attaque. Références courantes : dague "1d4"/perforant/finesse ; épée courte "1d6"/perforant/finesse ; épée longue "1d8"/tranchant/str ; hache d'armes "1d8"/tranchant/str ; marteau de guerre "1d8"/contondant/str ; arc court "1d6"/perforant/ranged=true ; arbalète légère "1d8"/perforant/ranged=true. Les armes purement décoratives/narratives (bâton brisé, épée de cérémonie) peuvent omettre weapon.
-- Dès que tu mentionnes des pièces (or, argent, cuivre, électrum, platine) gagnées ou dépensées, appelle adjust_currency(character_id, cp/sp/ep/gp/pp). Positif = gain, négatif = perte.
-- Exemple complet d'un pillage : "Vous trouvez 32 po, 4 pa, une épée courte, une fiole de poison" → 1) adjust_currency(PJ, gp=32, sp=4) ; 2) grant_item(PJ, "Épée courte", 1, "weapon") ; 3) grant_item(PJ, "Fiole de poison", 1, "consumable", "Puissant. À manier avec soin.").
-- Si plusieurs PJ/compagnons se partagent le butin, attribue logiquement (le commerçant nain prend l'or, le druide la fiole) ou répartis équitablement ; appelle les outils autant de fois que nécessaire, un par bénéficiaire.
-- Les objets narratifs sans valeur mécanique (lettre scellée, carnet, carte) méritent tout de même un grant_item type="misc" avec une description courte, pour qu'on les retrouve plus tard.
+Butin, bourse et équipement :
+- Narre librement qui ramasse quoi, qui donne quoi, qui dépense combien. Un concierge mécanique relit ta narration après le tour et met à jour bourses et inventaires — tu n'as pas à appeler grant_item/adjust_currency toi-même dans la plupart des cas.
+- Tu peux quand même appeler grant_item ou adjust_currency si tu veux garantir un transfert précis ou si la scène l'exige en plein milieu (ex: le joueur dépense 10 po AVANT d'obtenir un objet dans le même tour). Les deux flux coexistent sans conflit.
+- Pour que la fiche affiche le bonus d'attaque d'une arme, la décrire avec ses stats (dégâts + type + FOR/DEX) dans la narration suffit — le concierge remplit le weapon={}. Références courantes si tu veux être explicite : dague 1d4 perforant finesse, épée courte 1d6 perforant finesse, épée longue 1d8 tranchant, marteau de guerre 1d8 contondant, arc court 1d6 perforant à distance, arbalète légère 1d8 perforant à distance.
 
 Format des réponses :
 - Narration courte (3-6 phrases maximum par message)
@@ -163,19 +160,13 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
       return;
     }
 
-    // Safeguards — swallow the turn and re-prompt if the GM:
-    //   (a) delegated a roll instead of calling request_roll, or
-    //   (b) narrated loot (coins or item list) without persisting it.
+    // Safeguard: if the GM delegated a roll to the player without calling
+    // request_roll, swallow the text and re-prompt. Inventory/currency is
+    // handled separately by the post-turn concierge pass — no guard needed.
     const textBlocks = response.content.filter((b) => b.type === 'text');
     const fullText = textBlocks.map((b) => (b as Anthropic.Messages.TextBlock).text).join('');
     const calledRequestRoll = response.content.some(
       (b) => b.type === 'tool_use' && b.name === 'request_roll',
-    );
-    const calledGrantItem = response.content.some(
-      (b) => b.type === 'tool_use' && b.name === 'grant_item',
-    );
-    const calledAdjustCurrency = response.content.some(
-      (b) => b.type === 'tool_use' && b.name === 'adjust_currency',
     );
 
     if (hasRollDelegation(fullText) && !calledRequestRoll) {
@@ -187,22 +178,6 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
         role: 'user',
         content:
           'Tu viens d\'écrire une formule qui délègue un jet au joueur (ex: "Fais un jet", "Lance un dé", "Jette les dés"). C\'est interdit. Annule cette narration et appelle request_roll MAINTENANT, puis reprends la suite en fonction du résultat.',
-      });
-      continue;
-    }
-
-    const lootIssue = detectUnpersistedLoot(fullText, {
-      grant: calledGrantItem,
-      currency: calledAdjustCurrency,
-    });
-    if (lootIssue) {
-      messages.push({
-        role: 'assistant',
-        content: [{ type: 'text', text: '(tour rejeté : butin non persisté)' }],
-      });
-      messages.push({
-        role: 'user',
-        content: `Tu viens de narrer du butin sans appeler les outils qui le persistent. ${lootIssue} Annule cette narration et appelle ${calledGrantItem ? '' : 'grant_item pour CHAQUE objet listé '}${!calledGrantItem && !calledAdjustCurrency ? 'et ' : ''}${calledAdjustCurrency ? '' : 'adjust_currency pour les pièces '}MAINTENANT, puis reprends la narration du partage/réaction.`,
       });
       continue;
     }
@@ -802,41 +777,6 @@ function describeWeapons(character: CharacterRow): string[] {
     result.push(`${w.name} (att ${attack.toHit} · dmg ${attack.damage}${type})`);
   }
   return result;
-}
-
-/**
- * Detects loot narration that likely needs grant_item / adjust_currency.
- * Returns a short French reason string when the text mentions either
- * (a) a specific amount of coins, or (b) an item enumeration (≥ 2 bullets),
- * AND the expected tool wasn't called in the same turn. Returns null if
- * no persistence issue is detected.
- */
-const CURRENCY_PATTERNS: RegExp[] = [
-  // "47 po", "12 pa", "3 pp" — short form with a digit
-  /\b\d+\s*p(?:o|a|p|e|c)\b/i,
-  // "47 pièces d'or", "quarante-sept pièces d'or" — numeric or written
-  /(?:\d+|un|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|treize|quatorze|quinze|seize|vingt|trente|quarante|cinquante|soixante|cent|mille)[-\s]*(?:et[-\s]+)?(?:\w+[-\s]+)?pièces?\s+d'?\s*(?:or|argent|platine|électrum|electrum|cuivre)/i,
-];
-
-const LOOT_BULLET_RE = /^\s*[-–—]\s+(?:une?|des|le|la|l['']|ton|ta|tes|son|sa|ses)\b/gim;
-
-export function detectUnpersistedLoot(
-  text: string,
-  called: { grant: boolean; currency: boolean },
-): string | null {
-  if (!text || text.length < 20) return null;
-  const mentionsCoins = CURRENCY_PATTERNS.some((re) => re.test(text));
-  const bullets = (text.match(LOOT_BULLET_RE) ?? []).length;
-  const mentionsItemList = bullets >= 2;
-  const missCurrency = mentionsCoins && !called.currency;
-  const missGrant = mentionsItemList && !called.grant;
-  if (!missCurrency && !missGrant) return null;
-  const parts: string[] = [];
-  if (missCurrency)
-    parts.push("Des pièces sont mentionnées mais adjust_currency n'a pas été appelé.");
-  if (missGrant)
-    parts.push("Une liste d'objets est énumérée mais grant_item n'a pas été appelé pour eux.");
-  return parts.join(' ');
 }
 
 export function hasRollDelegation(text: string): boolean {
