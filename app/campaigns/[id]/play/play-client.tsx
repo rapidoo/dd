@@ -341,11 +341,8 @@ function PlayerPanel({
         <ul className="space-y-0">
           {party.map((m) => {
             const isAi = m.row.is_ai;
-            return (
-              <li
-                key={m.row.id}
-                className="flex items-center gap-3 border-b border-line py-2 last:border-b-0"
-              >
+            const row = (
+              <div className="flex items-center gap-3 py-2">
                 <span
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-display text-sm text-bg-deep"
                   style={{
@@ -360,19 +357,29 @@ function PlayerPanel({
                   <p className="truncate font-display text-[13px] text-text">{m.row.name}</p>
                   <p className="truncate text-[10px] text-text-mute">{roleLabel(m.row)}</p>
                 </div>
+                {!isAi && (
+                  <span className="font-ui text-[9px] uppercase tracking-widest text-moss">
+                    ● {statusLabel(m.row)}
+                  </span>
+                )}
+              </div>
+            );
+            return (
+              <li key={m.row.id} className="border-b border-line last:border-b-0">
                 {isAi ? (
                   <button
                     type="button"
                     onClick={() => onPromptCompanion(m.row.id)}
                     title="Lui passer la parole"
-                    className="font-ui text-[10px] uppercase tracking-widest text-gold hover:text-gold-bright"
+                    className="group flex w-full flex-col gap-2 py-2 text-left transition-colors hover:bg-[rgba(212,166,76,0.06)]"
                   >
-                    ▸
+                    {row}
+                    <span className="inline-flex items-center justify-center gap-2 border border-gold/60 bg-gradient-to-b from-gold-bright/15 to-gold/10 px-3 py-1.5 font-ui text-[11px] font-semibold uppercase tracking-[0.2em] text-gold-bright transition-colors group-hover:border-gold group-hover:bg-[rgba(212,166,76,0.15)]">
+                      ▸ Parler
+                    </span>
                   </button>
                 ) : (
-                  <span className="font-ui text-[9px] uppercase tracking-widest text-moss">
-                    ● {statusLabel(m.row)}
-                  </span>
+                  row
                 )}
               </li>
             );
