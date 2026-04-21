@@ -1,26 +1,208 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ============================================================================
+ * Dark fantasy tokens — ported from session.html const T + const F.
+ * ========================================================================== */
+
+@theme {
+  /* Backgrounds */
+  --color-bg: #0a0604;
+  --color-bg-deep: #1a100a;
+  --color-bg-mid: #2a1a10;
+  --color-panel: #20140d;
+  --color-card: rgba(0, 0, 0, 0.35);
+  --color-card-hover: rgba(0, 0, 0, 0.5);
+
+  /* Parchment (for "book" surfaces) */
+  --color-parch: #ede2c8;
+  --color-parch-dark: #d9c9a3;
+
+  /* Ink (text on parchment) */
+  --color-ink: #2a1a10;
+  --color-ink-soft: #4a3426;
+  --color-ink-fade: #8a6f52;
+
+  /* Primary text on dark */
+  --color-text: #f2e8d0;
+  --color-text-mid: #d8c8a8;
+  --color-text-mute: rgba(242, 232, 208, 0.6);
+  --color-text-faint: rgba(242, 232, 208, 0.4);
+
+  /* Accent — gold / candle */
+  --color-gold: #d4a64c;
+  --color-gold-bright: #ecc87a;
+  --color-gold-dim: #8a6420;
+  --color-candle: #f0b050;
+  --color-candle-glow: #ffc870;
+
+  /* Blood + nature */
+  --color-blood: #9a3028;
+  --color-blood-deep: #5a1810;
+  --color-moss: #6a7a3a;
+  --color-sky: #4a6a8a;
+  --color-violet: #6a5a8a;
+
+  /* Separators */
+  --color-line: rgba(212, 166, 76, 0.2);
+  --color-line-strong: rgba(212, 166, 76, 0.4);
+
+  /* Font families */
+  --font-narr: 'EB Garamond', Georgia, serif;
+  --font-ui: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'IM Fell English SC', 'EB Garamond', serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-ui);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 166, 76, 0.25);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 166, 76, 0.4);
+}
+
+/* ============================================================================
+ * Animations (verbatim from session.html)
+ * ========================================================================== */
+
+@keyframes diceTumble {
+  0% {
+    transform: translate(-50%, -50%) translateY(-200px) rotateX(0deg) rotateY(0deg) rotateZ(0deg)
+      scale(0.6);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  25% {
+    transform: translate(-50%, -50%) translateY(60px) rotateX(540deg) rotateY(360deg)
+      rotateZ(180deg) scale(1);
+  }
+  40% {
+    transform: translate(-50%, -50%) translateY(30px) rotateX(720deg) rotateY(540deg)
+      rotateZ(240deg) scale(1);
+  }
+  55% {
+    transform: translate(-50%, -50%) translateY(50px) rotateX(900deg) rotateY(720deg)
+      rotateZ(300deg) scale(1);
+  }
+  70% {
+    transform: translate(-50%, -50%) translateY(0) rotateX(1080deg) rotateY(900deg)
+      rotateZ(360deg) scale(1);
+  }
+  100% {
+    transform: translate(-50%, -50%) translateY(0) rotateX(1080deg) rotateY(900deg)
+      rotateZ(360deg) scale(1.2);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@keyframes diceSettle {
+  0% {
+    transform: translate(-50%, -50%) scale(1.2) rotate(0deg);
+    filter: brightness(1);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.05);
+    filter: brightness(1.3);
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1) rotate(0deg);
+    filter: brightness(1);
+  }
+}
+
+@keyframes critGlow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 30px 5px rgba(240, 176, 80, 0.5),
+      0 0 60px 10px rgba(240, 176, 80, 0.3),
+      inset 0 0 20px rgba(255, 255, 255, 0.3);
+  }
+  50% {
+    box-shadow:
+      0 0 60px 15px rgba(240, 176, 80, 0.8),
+      0 0 120px 30px rgba(240, 176, 80, 0.6),
+      inset 0 0 30px rgba(255, 255, 255, 0.5);
+  }
+}
+
+@keyframes critFailGlow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 30px 5px rgba(154, 48, 40, 0.5),
+      0 0 60px 10px rgba(154, 48, 40, 0.3),
+      inset 0 0 20px rgba(80, 0, 0, 0.3);
+  }
+  50% {
+    box-shadow:
+      0 0 60px 15px rgba(154, 48, 40, 0.8),
+      0 0 120px 30px rgba(154, 48, 40, 0.6),
+      inset 0 0 30px rgba(80, 0, 0, 0.5);
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulseSlow {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+@keyframes typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.2;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+.typing-dot {
+  animation: typing 1.4s infinite;
+  display: inline-block;
+}
+.typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+.msg-enter {
+  animation: fadeInUp 300ms ease-out;
+}
+
+.campaign-fire {
+  animation: pulseSlow 3s infinite;
 }
