@@ -1,6 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow, MessageRow } from '../db/types';
+import { type EntityKind, recallEntities, upsertEntity } from '../neo4j/queries';
 import { parseDiceExpression, rollD20, rollExpression } from '../rules/dice';
 import type { ConditionType } from '../rules/types';
 import {
@@ -134,15 +135,62 @@ async function executeTool(
   switch (block.name) {
     case 'request_roll':
       return executeRoll(block.input as RequestRollInput, sessionId);
-    case 'recall_memory':
-      return {
-        result: { context: 'Aucune entité connue pour cette requête (mémoire non câblée).' },
-        events: [{ type: 'memory_recalled', query: 'n/a', result: 'empty' }],
-      };
+    case 'recall_memory': {
+      const q = (block.input as { query: string }).query;
+      const campaignId = await campaignForSession(sessionId);
+      if (!campaignId) return { result: { context: 'Session invalide.' }, events: [] };
+      try {
+        const entities = await recallEntities(campaignId, q);
+        const context =
+          entities.length === 0
+            ? 'Aucune entité correspondante en mémoire.'
+            : entities
+                .map((e) => `- ${e.kind} "${e.name}": ${e.short_description ?? '(pas de résumé)'}`)
+                .join('\n');
+        return {
+          result: { entities, context },
+          events: [{ type: 'memory_recalled', query: q, result: String(entities.length) }],
+        };
+      } catch (err) {
+        return {
+          result: {
+            context: 'Mémoire momentanément indisponible.',
+            error: err instanceof Error ? err.message : 'neo4j error',
+          },
+          events: [],
+        };
+      }
+    }
     case 'record_entity': {
       const input = block.input as RecordEntityInput;
+      const campaignId = await campaignForSession(sessionId);
+      if (!campaignId) return { result: { ok: false, error: 'Session invalide.' }, events: [] };
+      const supabase = createSupabaseServiceClient();
+      const { data: row } = await supabase
+        .from('entities')
+        .insert({
+          campaign_id: campaignId,
+          kind: input.kind,
+          name: input.name,
+          short_description: input.short_description ?? null,
+        })
+        .select('*')
+        .single();
+      try {
+        if (row) {
+          await upsertEntity({
+            id: row.id,
+            campaign_id: campaignId,
+            kind: input.kind as EntityKind,
+            name: input.name,
+            short_description: input.short_description,
+          });
+        }
+      } catch (err) {
+        console.warn('Neo4j upsert failed, continuing', err);
+      }
       return {
-        result: { ok: true },
+        result: { ok: true, id: row?.id },
         events: [{ type: 'entity_recorded', kind: input.kind, name: input.name }],
       };
     }
@@ -234,6 +282,16 @@ async function executeTool(
     default:
       return { result: { error: `Unknown tool: ${block.name}` }, events: [] };
   }
+}
+
+async function campaignForSession(sessionId: string): Promise<string | null> {
+  const supabase = createSupabaseServiceClient();
+  const { data } = await supabase
+    .from('sessions')
+    .select('campaign_id')
+    .eq('id', sessionId)
+    .maybeSingle();
+  return data?.campaign_id ?? null;
 }
 
 async function executeCompanion(
