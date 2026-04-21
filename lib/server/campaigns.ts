@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { createSupabaseServerClient } from '../db/server';
 import type { CampaignRow } from '../db/types';
+import { getModuleTemplate } from '../modules/templates';
 import { requireUser } from './auth';
 
 const createSchema = z.object({
@@ -50,6 +51,22 @@ export async function createCampaign(
       fieldErrors: z.treeifyError(parsed.error).properties as Record<string, string[]>,
     };
   }
+  if (parsed.data.settingMode === 'module' && !parsed.data.moduleId) {
+    return { ok: false, error: 'Choisis un module pour ce mode.' };
+  }
+  const template =
+    parsed.data.settingMode === 'module' && parsed.data.moduleId
+      ? getModuleTemplate(parsed.data.moduleId)
+      : null;
+  if (parsed.data.settingMode === 'module' && !template) {
+    return { ok: false, error: 'Module inconnu.' };
+  }
+
+  // Seed the world summary from the template so the GM has the pitch ready.
+  const worldSummary = template
+    ? `${template.title} — ${template.tagline}\n\n${template.summary}\n\nNiveaux: ${template.levelRange} · Difficulté: ${template.difficulty} · Tons: ${template.tones.join(', ')}\nÉquipe conseillée: ${template.recommendedParty}`
+    : null;
+
   const user = await requireUser();
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase
@@ -58,8 +75,9 @@ export async function createCampaign(
       owner_id: user.id,
       name: parsed.data.name,
       setting_mode: parsed.data.settingMode,
-      setting_pitch: parsed.data.settingPitch,
+      setting_pitch: parsed.data.settingPitch ?? template?.tagline ?? null,
       module_id: parsed.data.moduleId,
+      world_summary: worldSummary,
     })
     .select('*')
     .single();

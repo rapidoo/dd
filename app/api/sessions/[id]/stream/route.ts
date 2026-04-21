@@ -39,6 +39,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         .eq('campaign_id', session.campaign_id)
         .order('created_at', { ascending: true })
     : { data: [] };
+  const { data: campaign } = session
+    ? await supabase
+        .from('campaigns')
+        .select('world_summary')
+        .eq('id', session.campaign_id)
+        .maybeSingle<{ world_summary: string | null }>()
+    : { data: null };
   const all = (characters ?? []) as CharacterRow[];
   const player = all.find((c) => !c.is_ai) ?? null;
   const companions = all.filter((c) => c.is_ai);
@@ -62,6 +69,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           history: (history ?? []) as MessageRow[],
           player,
           companions,
+          worldSummary: campaign?.world_summary ?? null,
         })) {
           if (ev.type === 'text_delta') {
             fullText.push(ev.delta);

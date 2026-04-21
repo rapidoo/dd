@@ -4,6 +4,7 @@ import { BtnPrimary } from '../../../components/ui/button';
 import { Stat } from '../../../components/ui/stat';
 import { createSupabaseServerClient } from '../../../lib/db/server';
 import type { CharacterRow, SessionRow } from '../../../lib/db/types';
+import { getModuleTemplate } from '../../../lib/modules/templates';
 import { CLASSES, SPECIES } from '../../../lib/rules/srd';
 import { requireUser } from '../../../lib/server/auth';
 import { getCampaign } from '../../../lib/server/campaigns';
@@ -52,6 +53,22 @@ export default async function CampaignPage({ params }: { params: Promise<Params>
             {campaign.setting_pitch}
           </p>
         )}
+        {campaign.module_id &&
+          (() => {
+            const module_ = getModuleTemplate(campaign.module_id);
+            if (!module_) return null;
+            return (
+              <div className="mt-4 inline-flex flex-wrap items-center gap-2 border border-line bg-card px-3 py-2 text-[11px] uppercase tracking-widest text-text-mute">
+                <span className="font-display text-gold">Module · {module_.title}</span>
+                <span className="text-text-faint">·</span>
+                <span>niv. {module_.levelRange}</span>
+                <span className="text-text-faint">·</span>
+                <span>{module_.difficulty}</span>
+                <span className="text-text-faint">·</span>
+                <span>{module_.sessionsEstimate}</span>
+              </div>
+            );
+          })()}
       </header>
 
       <section className="flex flex-wrap gap-3">

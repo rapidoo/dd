@@ -44,6 +44,8 @@ export interface GmTurnInput {
   history: MessageRow[];
   player: CharacterRow | null;
   companions: CharacterRow[];
+  /** Campaign pitch / world summary — injected in system prompt. */
+  worldSummary?: string | null;
 }
 
 export type GmEvent =
@@ -100,7 +102,7 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     messages.push({ role: 'user', content: input.userMessage });
   }
 
-  const systemPrompt = buildSystemPrompt(input.player, input.companions);
+  const systemPrompt = buildSystemPrompt(input.player, input.companions, input.worldSummary);
 
   let safety = 0;
   while (safety < 6) {
@@ -305,7 +307,11 @@ async function executeTool(
   }
 }
 
-function buildSystemPrompt(player: CharacterRow | null, companions: CharacterRow[]): string {
+function buildSystemPrompt(
+  player: CharacterRow | null,
+  companions: CharacterRow[],
+  worldSummary?: string | null,
+): string {
   const partyLines: string[] = [];
   if (player) {
     partyLines.push(
@@ -331,8 +337,10 @@ function buildSystemPrompt(player: CharacterRow | null, companions: CharacterRow
     );
   }
 
-  return `${GM_SYSTEM_PROMPT}
+  const worldBlock = worldSummary ? `\nCampagne en cours :\n${worldSummary.trim()}\n` : '';
 
+  return `${GM_SYSTEM_PROMPT}
+${worldBlock}
 Équipe actuelle :
 ${partyLines.join('\n')}
 

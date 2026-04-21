@@ -1,8 +1,9 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import { BtnPrimary } from '../../../components/ui/button';
 import type { CampaignRow } from '../../../lib/db/types';
+import { MODULE_TEMPLATES } from '../../../lib/modules/templates';
 import { createCampaign, type ServerResult } from '../../../lib/server/campaigns';
 
 const MODES: Array<{
@@ -36,6 +37,8 @@ export function NewCampaignForm() {
     createCampaign,
     null,
   );
+  const [settingMode, setSettingMode] = useState<'homebrew' | 'module' | 'generated'>('homebrew');
+  const [moduleId, setModuleId] = useState<string | null>(null);
 
   const fieldError = (key: string) => {
     if (!state || state.ok) return null;
@@ -62,7 +65,7 @@ export function NewCampaignForm() {
       <fieldset className="flex flex-col gap-3">
         <legend className="text-xs uppercase tracking-[0.2em] text-text-mute">Type de monde</legend>
         <div className="grid gap-3 md:grid-cols-3">
-          {MODES.map((mode, idx) => (
+          {MODES.map((mode) => (
             <label
               key={mode.value}
               className="flex cursor-pointer flex-col gap-1 border border-line bg-card p-4 has-[:checked]:border-gold has-[:checked]:bg-[rgba(212,166,76,0.08)]"
@@ -71,7 +74,8 @@ export function NewCampaignForm() {
                 type="radio"
                 name="settingMode"
                 value={mode.value}
-                defaultChecked={idx === 0}
+                checked={settingMode === mode.value}
+                onChange={() => setSettingMode(mode.value)}
                 className="sr-only"
               />
               <span className="font-display text-xl text-gold-bright">{mode.glyph}</span>
@@ -81,6 +85,59 @@ export function NewCampaignForm() {
           ))}
         </div>
       </fieldset>
+
+      {settingMode === 'module' && (
+        <section className="flex flex-col gap-3">
+          <p className="text-xs uppercase tracking-[0.2em] text-text-mute">
+            Choisis un module — {MODULE_TEMPLATES.length} disponibles
+          </p>
+          <input type="hidden" name="moduleId" value={moduleId ?? ''} />
+          <div className="grid gap-3 md:grid-cols-2">
+            {MODULE_TEMPLATES.map((t) => {
+              const selected = moduleId === t.id;
+              return (
+                <button
+                  type="button"
+                  key={t.id}
+                  onClick={() => setModuleId(t.id)}
+                  className={`flex flex-col gap-2 border p-4 text-left transition-colors ${
+                    selected
+                      ? 'border-gold bg-[rgba(212,166,76,0.1)]'
+                      : 'border-line bg-card hover:border-gold/60'
+                  }`}
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="font-display text-base text-gold-bright">{t.title}</span>
+                    <span
+                      className="font-display text-[10px] uppercase tracking-[0.2em]"
+                      style={{ color: difficultyColor(t.difficulty) }}
+                    >
+                      {t.difficulty}
+                    </span>
+                  </div>
+                  <p className="font-narr text-sm italic text-text-mid">{t.tagline}</p>
+                  <p className="font-narr text-sm text-text">{t.summary}</p>
+                  <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-widest text-text-mute">
+                    <span className="border border-line px-2 py-0.5">niv. {t.levelRange}</span>
+                    <span className="border border-line px-2 py-0.5">{t.sessionsEstimate}</span>
+                    {t.tones.map((tone) => (
+                      <span key={tone} className="text-text-faint">
+                        · {tone}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="mt-1 font-ui text-[11px] text-text-mute">
+                    <span className="text-gold">Équipe conseillée :</span> {t.recommendedParty}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+          {settingMode === 'module' && !moduleId && (
+            <p className="text-xs text-blood">Sélectionne un module pour continuer.</p>
+          )}
+        </section>
+      )}
 
       <label className="flex flex-col gap-1 text-xs uppercase tracking-[0.2em] text-text-mute">
         Pitch optionnel
@@ -98,10 +155,25 @@ export function NewCampaignForm() {
       )}
 
       <div className="flex justify-end">
-        <BtnPrimary icon="✦" type="submit">
+        <BtnPrimary icon="✦" type="submit" disabled={settingMode === 'module' && !moduleId}>
           Allumer le feu
         </BtnPrimary>
       </div>
     </form>
   );
+}
+
+function difficultyColor(d: string): string {
+  switch (d) {
+    case 'débutant':
+      return 'var(--color-moss)';
+    case 'intermédiaire':
+      return 'var(--color-gold)';
+    case 'expert':
+      return 'var(--color-candle)';
+    case 'mortel':
+      return 'var(--color-blood)';
+    default:
+      return 'var(--color-text-mute)';
+  }
 }
