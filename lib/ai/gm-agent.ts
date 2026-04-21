@@ -163,17 +163,22 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
       return;
     }
 
-    // Safeguard: if the GM wrote a roll-delegation phrase ("Fais un jet…")
-    // without calling request_roll in the same turn, we swallow that text and
-    // re-prompt instead of streaming the bad narration to the player.
+    // Safeguards — swallow the turn and re-prompt if the GM:
+    //   (a) delegated a roll instead of calling request_roll, or
+    //   (b) narrated loot (coins or item list) without persisting it.
     const textBlocks = response.content.filter((b) => b.type === 'text');
     const fullText = textBlocks.map((b) => (b as Anthropic.Messages.TextBlock).text).join('');
     const calledRequestRoll = response.content.some(
       (b) => b.type === 'tool_use' && b.name === 'request_roll',
     );
-    const delegated = hasRollDelegation(fullText);
+    const calledGrantItem = response.content.some(
+      (b) => b.type === 'tool_use' && b.name === 'grant_item',
+    );
+    const calledAdjustCurrency = response.content.some(
+      (b) => b.type === 'tool_use' && b.name === 'adjust_currency',
+    );
 
-    if (delegated && !calledRequestRoll) {
+    if (hasRollDelegation(fullText) && !calledRequestRoll) {
       messages.push({
         role: 'assistant',
         content: [{ type: 'text', text: '(tour rejeté : jet délégué au joueur)' }],
@@ -182,6 +187,22 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
         role: 'user',
         content:
           'Tu viens d\'écrire une formule qui délègue un jet au joueur (ex: "Fais un jet", "Lance un dé", "Jette les dés"). C\'est interdit. Annule cette narration et appelle request_roll MAINTENANT, puis reprends la suite en fonction du résultat.',
+      });
+      continue;
+    }
+
+    const lootIssue = detectUnpersistedLoot(fullText, {
+      grant: calledGrantItem,
+      currency: calledAdjustCurrency,
+    });
+    if (lootIssue) {
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: '(tour rejeté : butin non persisté)' }],
+      });
+      messages.push({
+        role: 'user',
+        content: `Tu viens de narrer du butin sans appeler les outils qui le persistent. ${lootIssue} Annule cette narration et appelle ${calledGrantItem ? '' : 'grant_item pour CHAQUE objet listé '}${!calledGrantItem && !calledAdjustCurrency ? 'et ' : ''}${calledAdjustCurrency ? '' : 'adjust_currency pour les pièces '}MAINTENANT, puis reprends la narration du partage/réaction.`,
       });
       continue;
     }
@@ -781,6 +802,41 @@ function describeWeapons(character: CharacterRow): string[] {
     result.push(`${w.name} (att ${attack.toHit} · dmg ${attack.damage}${type})`);
   }
   return result;
+}
+
+/**
+ * Detects loot narration that likely needs grant_item / adjust_currency.
+ * Returns a short French reason string when the text mentions either
+ * (a) a specific amount of coins, or (b) an item enumeration (≥ 2 bullets),
+ * AND the expected tool wasn't called in the same turn. Returns null if
+ * no persistence issue is detected.
+ */
+const CURRENCY_PATTERNS: RegExp[] = [
+  // "47 po", "12 pa", "3 pp" — short form with a digit
+  /\b\d+\s*p(?:o|a|p|e|c)\b/i,
+  // "47 pièces d'or", "quarante-sept pièces d'or" — numeric or written
+  /(?:\d+|un|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|treize|quatorze|quinze|seize|vingt|trente|quarante|cinquante|soixante|cent|mille)[-\s]*(?:et[-\s]+)?(?:\w+[-\s]+)?pièces?\s+d'?\s*(?:or|argent|platine|électrum|electrum|cuivre)/i,
+];
+
+const LOOT_BULLET_RE = /^\s*[-–—]\s+(?:une?|des|le|la|l['']|ton|ta|tes|son|sa|ses)\b/gim;
+
+export function detectUnpersistedLoot(
+  text: string,
+  called: { grant: boolean; currency: boolean },
+): string | null {
+  if (!text || text.length < 20) return null;
+  const mentionsCoins = CURRENCY_PATTERNS.some((re) => re.test(text));
+  const bullets = (text.match(LOOT_BULLET_RE) ?? []).length;
+  const mentionsItemList = bullets >= 2;
+  const missCurrency = mentionsCoins && !called.currency;
+  const missGrant = mentionsItemList && !called.grant;
+  if (!missCurrency && !missGrant) return null;
+  const parts: string[] = [];
+  if (missCurrency)
+    parts.push("Des pièces sont mentionnées mais adjust_currency n'a pas été appelé.");
+  if (missGrant)
+    parts.push("Une liste d'objets est énumérée mais grant_item n'a pas été appelé pour eux.");
+  return parts.join(' ');
 }
 
 export function hasRollDelegation(text: string): boolean {
