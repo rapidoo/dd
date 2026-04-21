@@ -158,15 +158,9 @@ export default async function SheetPage({
         </section>
       )}
 
-      <PurseSection
-        characterId={character.id}
-        currency={character.currency ?? { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 }}
-      />
+      <PurseSection currency={character.currency ?? { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 }} />
 
-      <InventorySection
-        characterId={character.id}
-        inventory={(character.inventory as InventoryItem[]) ?? []}
-      />
+      <InventorySection inventory={(character.inventory as InventoryItem[]) ?? []} />
     </main>
   );
 }
