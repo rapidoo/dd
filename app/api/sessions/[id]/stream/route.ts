@@ -80,8 +80,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       const fullText: string[] = [];
       try {
         // /debug <subcommand> short-circuits the LLM entirely — fast UI
-        // smoke test without spending tokens. Only honored in non-prod.
-        const debugAllowed = process.env.NODE_ENV !== 'production';
+        // smoke test without spending tokens. Honored in local dev and
+        // Vercel preview, but not Vercel production.
+        const debugAllowed = process.env.VERCEL_ENV
+          ? process.env.VERCEL_ENV !== 'production'
+          : process.env.NODE_ENV !== 'production';
         const debug = debugAllowed && isDebugCommand(userMessage);
 
         const iterator = debug
