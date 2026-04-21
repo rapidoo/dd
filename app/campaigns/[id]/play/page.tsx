@@ -29,6 +29,7 @@ export default async function PlayPage({ params }: { params: Promise<{ id: strin
 
   return (
     <PlayClient
+      campaignId={campaign.id}
       campaignName={campaign.name}
       sessionId={session.id}
       sessionNumber={session.session_number}

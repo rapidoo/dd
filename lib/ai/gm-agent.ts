@@ -32,9 +32,17 @@ Contexte mécanique :
 - Théâtre de l'esprit : pas de grille tactique. Décris les distances en langage naturel ("à trois pas", "au fond de la salle").
 - Les jets critiques (nat 20) font réussir et amplifier ; les nat 1 font rater et compliquer.
 
+Gestion des PV et des états — RÈGLE ABSOLUE :
+- NE JAMAIS écrire des points de vie dans la narration (pas de "PV 7/12", pas de "il te reste X points de vie"). L'interface affiche les PV en direct depuis la base.
+- Quand un PJ ou un compagnon subit des dégâts : appelle IMMÉDIATEMENT apply_damage(combatant_id, amount). Positif = dégâts, négatif = soins. L'id du personnage apparaît dans la section Équipe ci-dessous.
+- Pour un état (à terre, effrayé, paralysé, etc.) : apply_condition(combatant_id, condition, add=true).
+- Ces outils fonctionnent même hors combat formel — ils mettent le personnage à jour directement.
+- Réserve start_combat pour de vraies rencontres qui demandent un ordre d'initiative strict.
+
 Format des réponses :
 - Narration courte (3-6 phrases maximum par message)
-- Pas de markdown, pas d'emojis
+- Pas de markdown (ni **gras**, ni listes, ni titres ##)
+- Pas d'emojis
 - Italique en HTML <em>...</em> uniquement pour les paroles d'un PNJ
 `;
 
@@ -259,16 +267,19 @@ async function executeTool(
     case 'apply_damage': {
       const input = block.input as { combatant_id: string; amount: number };
       const enc = await activeEncounter(sessionId);
-      if (!enc) return { result: { error: 'Aucun combat actif' }, events: [] };
-      const next = await mutateEncounter(enc.id, (e) =>
-        input.amount >= 0
-          ? applyDamageToCombatant(e, input.combatant_id, input.amount)
-          : healCombatant(e, input.combatant_id, -input.amount),
-      );
-      return {
-        result: { combatants: next.combatants },
-        events: [{ type: 'combat_update' }],
-      };
+      if (enc) {
+        const next = await mutateEncounter(enc.id, (e) =>
+          input.amount >= 0
+            ? applyDamageToCombatant(e, input.combatant_id, input.amount)
+            : healCombatant(e, input.combatant_id, -input.amount),
+        );
+        return {
+          result: { combatants: next.combatants },
+          events: [{ type: 'combat_update' }],
+        };
+      }
+      // No active encounter — operate directly on the character row.
+      return await applyDamageToCharacter(input.combatant_id, input.amount);
     }
     case 'apply_condition': {
       const input = block.input as {
@@ -278,14 +289,21 @@ async function executeTool(
         duration_rounds?: number;
       };
       const enc = await activeEncounter(sessionId);
-      if (!enc) return { result: { error: 'Aucun combat actif' }, events: [] };
-      const next = await mutateEncounter(enc.id, (e) =>
-        toggleCondition(e, input.combatant_id, input.condition, input.add, input.duration_rounds),
+      if (enc) {
+        const next = await mutateEncounter(enc.id, (e) =>
+          toggleCondition(e, input.combatant_id, input.condition, input.add, input.duration_rounds),
+        );
+        return {
+          result: { combatants: next.combatants },
+          events: [{ type: 'combat_update' }],
+        };
+      }
+      return await toggleConditionOnCharacter(
+        input.combatant_id,
+        input.condition,
+        input.add,
+        input.duration_rounds,
       );
-      return {
-        result: { combatants: next.combatants },
-        events: [{ type: 'combat_update' }],
-      };
     }
     case 'next_turn': {
       const enc = await activeEncounter(sessionId);
@@ -489,4 +507,68 @@ function mapRollKind(
   kind: RequestRollInput['kind'],
 ): 'attack' | 'damage' | 'save' | 'check' | 'initiative' | 'concentration' {
   return kind;
+}
+
+async function applyDamageToCharacter(
+  characterId: string,
+  amount: number,
+): Promise<{ result: unknown; events: GmEvent[] }> {
+  const supabase = createSupabaseServiceClient();
+  const { data: character } = await supabase
+    .from('characters')
+    .select('id, current_hp, max_hp, temp_hp')
+    .eq('id', characterId)
+    .maybeSingle();
+  if (!character) return { result: { error: 'Personnage introuvable' }, events: [] };
+  if (amount >= 0) {
+    // Damage — absorb temp first.
+    let remaining = amount;
+    let temp = character.temp_hp;
+    if (temp > 0) {
+      const absorbed = Math.min(temp, remaining);
+      temp -= absorbed;
+      remaining -= absorbed;
+    }
+    const newCurrent = Math.max(0, character.current_hp - remaining);
+    await supabase
+      .from('characters')
+      .update({ current_hp: newCurrent, temp_hp: temp })
+      .eq('id', characterId);
+    return {
+      result: { ok: true, current_hp: newCurrent, max_hp: character.max_hp },
+      events: [{ type: 'combat_update' }],
+    };
+  }
+  const newCurrent = Math.min(character.max_hp, character.current_hp + -amount);
+  await supabase.from('characters').update({ current_hp: newCurrent }).eq('id', characterId);
+  return {
+    result: { ok: true, current_hp: newCurrent, max_hp: character.max_hp },
+    events: [{ type: 'combat_update' }],
+  };
+}
+
+async function toggleConditionOnCharacter(
+  characterId: string,
+  condition: ConditionType,
+  add: boolean,
+  durationRounds?: number,
+): Promise<{ result: unknown; events: GmEvent[] }> {
+  const supabase = createSupabaseServiceClient();
+  const { data: character } = await supabase
+    .from('characters')
+    .select('id, conditions')
+    .eq('id', characterId)
+    .maybeSingle();
+  if (!character) return { result: { error: 'Personnage introuvable' }, events: [] };
+  const existing = (character.conditions as Array<{ type: string; durationRounds?: number }>) ?? [];
+  const next = add
+    ? existing.some((c) => c.type === condition)
+      ? existing.map((c) => (c.type === condition ? { ...c, durationRounds } : c))
+      : [...existing, { type: condition, durationRounds }]
+    : existing.filter((c) => c.type !== condition);
+  await supabase.from('characters').update({ conditions: next }).eq('id', characterId);
+  return {
+    result: { ok: true, conditions: next },
+    events: [{ type: 'combat_update' }],
+  };
 }

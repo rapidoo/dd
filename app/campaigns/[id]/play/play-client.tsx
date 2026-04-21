@@ -8,9 +8,11 @@ import { BtnPrimary } from '../../../../components/ui/button';
 import { SlotRow, Stat } from '../../../../components/ui/stat';
 import type { CharacterRow, MessageRow } from '../../../../lib/db/types';
 import { promptCompanion } from '../../../../lib/server/companion-actions';
+import { getParty } from '../../../../lib/server/party';
 import { postUserMessage } from '../../../../lib/server/sessions';
 
 interface Props {
+  campaignId: string;
   campaignName: string;
   sessionId: string;
   sessionNumber: number;
@@ -38,17 +40,30 @@ type DisplayMessage =
     };
 
 export function PlayClient({
+  campaignId,
   campaignName,
   sessionId,
   sessionNumber,
   initialMessages,
-  player,
-  companions,
+  player: initialPlayer,
+  companions: initialCompanions,
 }: Props) {
+  const [player, setPlayer] = useState(initialPlayer);
+  const [companions, setCompanions] = useState(initialCompanions);
   const companionMap = new Map(companions.map((c) => [c.id, c]));
   const [messages, setMessages] = useState<DisplayMessage[]>(() =>
     initialMessages.map((m) => toDisplay(m, companionMap)),
   );
+
+  async function refreshParty() {
+    try {
+      const next = await getParty(campaignId);
+      setPlayer(next.player);
+      setCompanions(next.companions);
+    } catch {
+      // silent — next turn will retry
+    }
+  }
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -190,6 +205,7 @@ export function PlayClient({
       setMessages((m) =>
         m.map((x) => (x.kind === 'msg' && x.id === gmId ? { ...x, streaming: false } : x)),
       );
+      void refreshParty();
     }
   }
 
@@ -310,6 +326,7 @@ export function PlayClient({
                     },
                   ]);
                   await streamGmFollowUp(now);
+                  void refreshParty();
                 });
               }}
             />
