@@ -7,6 +7,7 @@ import { BtnPrimary } from '../../../../components/ui/button';
 import { DiceOverlay, type DiceOverlayState } from '../../../../components/ui/dice-overlay';
 import { SlotRow, Stat } from '../../../../components/ui/stat';
 import type { CharacterRow, MessageRow } from '../../../../lib/db/types';
+import { promptCompanion } from '../../../../lib/server/companion-actions';
 import { postUserMessage } from '../../../../lib/server/sessions';
 
 interface Props {
@@ -270,7 +271,35 @@ export function PlayClient({
           </div>
 
           {(player || companions.length > 0) && (
-            <PlayerPanel player={player} companions={companions} />
+            <PlayerPanel
+              player={player}
+              companions={companions}
+              onPromptCompanion={(characterId) => {
+                const comp = companions.find((c) => c.id === characterId);
+                if (!comp) return;
+                setTyping(true);
+                promptCompanion({ sessionId, characterId }).then((res) => {
+                  setTyping(false);
+                  const content = res.ok ? res.content : undefined;
+                  if (!content) return;
+                  const now = new Date().toLocaleTimeString('fr-FR', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  });
+                  setMessages((m) => [
+                    ...m,
+                    {
+                      id: `c-${Date.now()}-${characterId}`,
+                      authorKind: 'companion',
+                      authorName: res.characterName ?? comp.name,
+                      content,
+                      time: now,
+                      color: '#c47a3a',
+                    },
+                  ]);
+                });
+              }}
+            />
           )}
         </div>
       </div>
@@ -286,9 +315,11 @@ const COMPANION_GLYPHS = ['⚔', '♪', '❋', '✦', '◈'];
 function PlayerPanel({
   player,
   companions,
+  onPromptCompanion,
 }: {
   player: CharacterRow | null;
   companions: CharacterRow[];
+  onPromptCompanion: (characterId: string) => void;
 }) {
   const party: Array<{ row: CharacterRow; isMj: false; color: string; glyph: string }> = [];
   if (player) party.push({ row: player, isMj: false, color: 'var(--color-gold)', glyph: '⚜' });
@@ -308,30 +339,44 @@ function PlayerPanel({
           ✧ Autour du feu
         </p>
         <ul className="space-y-0">
-          {party.map((m) => (
-            <li
-              key={m.row.id}
-              className="flex items-center gap-3 border-b border-line py-2 last:border-b-0"
-            >
-              <span
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-display text-sm text-bg-deep"
-                style={{
-                  background: `radial-gradient(circle, ${m.color}, ${m.color}88)`,
-                  border: `1.5px solid ${m.color}`,
-                }}
-                aria-hidden
+          {party.map((m) => {
+            const isAi = m.row.is_ai;
+            return (
+              <li
+                key={m.row.id}
+                className="flex items-center gap-3 border-b border-line py-2 last:border-b-0"
               >
-                {m.glyph}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-display text-[13px] text-text">{m.row.name}</p>
-                <p className="truncate text-[10px] text-text-mute">{roleLabel(m.row)}</p>
-              </div>
-              <span className="font-ui text-[9px] uppercase tracking-widest text-moss">
-                ● {statusLabel(m.row)}
-              </span>
-            </li>
-          ))}
+                <span
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-display text-sm text-bg-deep"
+                  style={{
+                    background: `radial-gradient(circle, ${m.color}, ${m.color}88)`,
+                    border: `1.5px solid ${m.color}`,
+                  }}
+                  aria-hidden
+                >
+                  {m.glyph}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-display text-[13px] text-text">{m.row.name}</p>
+                  <p className="truncate text-[10px] text-text-mute">{roleLabel(m.row)}</p>
+                </div>
+                {isAi ? (
+                  <button
+                    type="button"
+                    onClick={() => onPromptCompanion(m.row.id)}
+                    title="Lui passer la parole"
+                    className="font-ui text-[10px] uppercase tracking-widest text-gold hover:text-gold-bright"
+                  >
+                    ▸
+                  </button>
+                ) : (
+                  <span className="font-ui text-[9px] uppercase tracking-widest text-moss">
+                    ● {statusLabel(m.row)}
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </section>
 

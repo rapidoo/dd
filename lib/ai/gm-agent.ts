@@ -42,6 +42,8 @@ export interface GmTurnInput {
   sessionId: string;
   userMessage: string;
   history: MessageRow[];
+  player: CharacterRow | null;
+  companions: CharacterRow[];
 }
 
 export type GmEvent =
@@ -81,6 +83,8 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     }));
   messages.push({ role: 'user', content: input.userMessage });
 
+  const systemPrompt = buildSystemPrompt(input.player, input.companions);
+
   let safety = 0;
   while (safety < 6) {
     safety++;
@@ -89,7 +93,7 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
       response = await anthropic().messages.create({
         model: MODELS.GM,
         max_tokens: 1024,
-        system: GM_SYSTEM_PROMPT,
+        system: systemPrompt,
         tools: GM_TOOLS,
         messages,
       });
@@ -282,6 +286,40 @@ async function executeTool(
     default:
       return { result: { error: `Unknown tool: ${block.name}` }, events: [] };
   }
+}
+
+function buildSystemPrompt(player: CharacterRow | null, companions: CharacterRow[]): string {
+  const partyLines: string[] = [];
+  if (player) {
+    partyLines.push(
+      `- Le joueur incarne ${player.name} (${player.species} · ${player.class} niv. ${player.level}). PV ${player.current_hp}/${player.max_hp}, CA ${player.ac}.`,
+    );
+  }
+  if (companions.length > 0) {
+    partyLines.push(
+      "- Compagnons IA autour du feu (utilise l'outil prompt_companion pour leur donner la parole) :",
+    );
+    for (const c of companions) {
+      const persona =
+        typeof c.persona === 'object' && c.persona && 'notes' in c.persona
+          ? String((c.persona as { notes?: unknown }).notes ?? '')
+          : '';
+      partyLines.push(
+        `  · id="${c.id}" — ${c.name} (${c.species} ${c.class} niv. ${c.level})${persona ? ` — ${persona}` : ''}`,
+      );
+    }
+  } else {
+    partyLines.push(
+      "- Le joueur n'a pas encore de compagnon IA. Si la situation s'y prête, tu peux évoquer qu'il est seul, mais NE propose PAS d'en introduire : c'est le joueur qui en recrute via la page Équipe.",
+    );
+  }
+
+  return `${GM_SYSTEM_PROMPT}
+
+Équipe actuelle :
+${partyLines.join('\n')}
+
+Quand un compagnon est présent, pense à lui laisser la parole régulièrement via prompt_companion — décris une scène, puis passe-lui le micro (indique character_id et éventuellement un hint).`;
 }
 
 async function campaignForSession(sessionId: string): Promise<string | null> {

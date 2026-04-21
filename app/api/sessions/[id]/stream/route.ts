@@ -1,6 +1,6 @@
 import { runGmTurn } from '../../../../../lib/ai/gm-agent';
 import { createSupabaseServerClient } from '../../../../../lib/db/server';
-import type { MessageRow } from '../../../../../lib/db/types';
+import type { CharacterRow, MessageRow } from '../../../../../lib/db/types';
 
 export const runtime = 'nodejs';
 
@@ -24,6 +24,22 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     .eq('session_id', sessionId)
     .order('created_at', { ascending: true });
 
+  const { data: session } = await supabase
+    .from('sessions')
+    .select('campaign_id')
+    .eq('id', sessionId)
+    .maybeSingle();
+  const { data: characters } = session
+    ? await supabase
+        .from('characters')
+        .select('*')
+        .eq('campaign_id', session.campaign_id)
+        .order('created_at', { ascending: true })
+    : { data: [] };
+  const all = (characters ?? []) as CharacterRow[];
+  const player = all.find((c) => !c.is_ai) ?? null;
+  const companions = all.filter((c) => c.is_ai);
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -37,6 +53,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           sessionId,
           userMessage,
           history: (history ?? []) as MessageRow[],
+          player,
+          companions,
         })) {
           if (ev.type === 'text_delta') {
             fullText.push(ev.delta);
