@@ -13,6 +13,7 @@ chronologique :
 | 1 | `migrations/20260420120000_init_schema.sql` | 9 tables (profiles, campaigns, characters, sessions, messages, dice_rolls, combat_encounters, entities, generated_assets), triggers `updated_at`, trigger `handle_new_user` |
 | 2 | `migrations/20260420120100_rls_policies.sql` | RLS activé partout + policies basées sur `owns_campaign(campaign_id)` |
 | 3 | `migrations/20260421090000_add_currency.sql` | Ajoute la colonne `currency` JSONB sur `characters` |
+| 4 | `migrations/20260421130000_message_cap.sql` | Cap 16 KB sur `messages.content` + `campaigns.world_summary`, 8 KB sur `sessions.summary` (anti-blob-abuse) |
 
 ## Procédure rapide (Dashboard)
 

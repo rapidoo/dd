@@ -1,6 +1,7 @@
 import { runGmTurn } from '../../../../../lib/ai/gm-agent';
 import { createSupabaseServerClient } from '../../../../../lib/db/server';
 import type { CharacterRow, MessageRow } from '../../../../../lib/db/types';
+import { rateLimit } from '../../../../../lib/server/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -20,6 +21,24 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const supabase = await createSupabaseServerClient();
   const { data: user } = await supabase.auth.getUser();
   if (!user.user) return new Response('unauthorized', { status: 401 });
+
+  // Rate limit: 20 GM turns per minute per user (Opus costs add up).
+  const rl = rateLimit(`sse:${user.user.id}`, 20, 60_000);
+  if (!rl.ok) {
+    return new Response('Too many requests', {
+      status: 429,
+      headers: rl.retryAfterMs
+        ? { 'Retry-After': String(Math.ceil(rl.retryAfterMs / 1000)) }
+        : undefined,
+    });
+  }
+
+  // Hard cap on user message size — Zod already rejects > 4000 for the
+  // POST Server Action, but the SSE route accepts the message in the URL
+  // where only the Server Action-side validation runs. Double-check here.
+  if (userMessage.length > 4000) {
+    return new Response('message too large', { status: 413 });
+  }
 
   // Ownership check — sessions is RLS-gated so this returns null if the user
   // does not own the campaign. Treat null as 404 to avoid leaking session
@@ -89,8 +108,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           } else if (ev.type === 'error') {
             write('error', { message: ev.message });
           } else if (ev.type === 'done') {
-            // persist the assembled GM message
-            const content = fullText.join('').trim();
+            // Persist the assembled GM message, truncated defensively to match
+            // the DB CHECK constraint (16 KB / 16384 chars).
+            const raw = fullText.join('').trim();
+            const content = raw.length > 16384 ? `${raw.slice(0, 16380)}…` : raw;
             if (content) {
               await supabase
                 .from('messages')

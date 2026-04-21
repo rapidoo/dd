@@ -1,9 +1,10 @@
 import type Anthropic from '@anthropic-ai/sdk';
+import { z } from 'zod';
 import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow, MessageRow } from '../db/types';
 import { type EntityKind, recallEntities, upsertEntity } from '../neo4j/queries';
 import { parseDiceExpression, rollD20, rollExpression } from '../rules/dice';
-import type { ConditionType } from '../rules/types';
+import { CONDITION_TYPES, type ConditionType } from '../rules/types';
 import {
   activeEncounter,
   advanceTurnEncounter,
@@ -160,15 +161,116 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
   yield { type: 'error', message: 'Too many tool iterations' };
 }
 
+// --- Zod schemas for every tool input --------------------------------------
+// The LLM produces these inputs. We validate before trusting them, so a
+// hallucinated or prompt-injected payload can't reach the DB.
+
+const ROLL_KINDS = ['attack', 'damage', 'save', 'check', 'initiative', 'concentration'] as const;
+const ADVANTAGE = ['normal', 'advantage', 'disadvantage'] as const;
+const ENTITY_KINDS = ['npc', 'location', 'faction', 'item', 'quest', 'event'] as const;
+const ITEM_TYPES = ['weapon', 'armor', 'tool', 'consumable', 'treasure', 'misc'] as const;
+
+const rollSchema = z.object({
+  kind: z.enum(ROLL_KINDS),
+  label: z.string().trim().min(1).max(80),
+  dice: z.string().regex(/^\s*\d*d(4|6|8|10|12|20|100)(\s*[+-]\s*\d+)?\s*$/i),
+  dc: z.number().int().min(1).max(40).optional(),
+  target_ac: z.number().int().min(1).max(40).optional(),
+  advantage: z.enum(ADVANTAGE).optional(),
+});
+
+const recallSchema = z.object({ query: z.string().min(1).max(200) });
+
+const recordEntitySchema = z.object({
+  kind: z.enum(ENTITY_KINDS),
+  name: z.string().trim().min(1).max(120),
+  short_description: z.string().trim().max(400).optional(),
+});
+
+const combatantIdSchema = z.string().min(1).max(128);
+const characterIdSchema = z.string().uuid();
+
+const startCombatSchema = z.object({
+  npcs: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(80),
+        ac: z.number().int().min(5).max(30),
+        hp: z.number().int().min(1).max(999),
+        dex_mod: z.number().int().min(-5).max(10).optional(),
+      }),
+    )
+    .min(0)
+    .max(12),
+});
+
+const applyDamageSchema = z.object({
+  combatant_id: combatantIdSchema,
+  amount: z.number().int().min(-999).max(999),
+});
+
+const applyConditionSchema = z.object({
+  combatant_id: combatantIdSchema,
+  condition: z.enum(CONDITION_TYPES as unknown as [string, ...string[]]),
+  add: z.boolean(),
+  duration_rounds: z.number().int().min(1).max(100).optional(),
+});
+
+const grantItemSchema = z.object({
+  character_id: characterIdSchema,
+  name: z.string().trim().min(1).max(80),
+  qty: z.number().int().min(-999).max(999),
+  type: z.enum(ITEM_TYPES).optional(),
+  description: z.string().trim().max(400).optional(),
+});
+
+const adjustCurrencySchema = z.object({
+  character_id: characterIdSchema,
+  cp: z.number().int().min(-99999).max(99999).optional(),
+  sp: z.number().int().min(-99999).max(99999).optional(),
+  ep: z.number().int().min(-99999).max(99999).optional(),
+  gp: z.number().int().min(-99999).max(99999).optional(),
+  pp: z.number().int().min(-99999).max(99999).optional(),
+});
+
+const promptCompanionSchema = z.object({
+  character_id: characterIdSchema,
+  hint: z.string().trim().max(400).optional(),
+});
+
+/**
+ * Parse an LLM-provided tool input with Zod. Returns the parsed value or an
+ * error payload that can be fed back to the LLM without crashing the turn.
+ */
+function parseToolInput<T>(
+  schema: z.ZodType<T>,
+  raw: unknown,
+): { ok: true; data: T } | { ok: false; result: unknown } {
+  const parsed = schema.safeParse(raw);
+  if (parsed.success) return { ok: true, data: parsed.data };
+  return {
+    ok: false,
+    result: {
+      error: 'Invalid tool input',
+      details: parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}: ${i.message}`),
+    },
+  };
+}
+
 async function executeTool(
   block: Anthropic.Messages.ToolUseBlock,
   sessionId: string,
 ): Promise<{ result: unknown; events: GmEvent[] }> {
   switch (block.name) {
-    case 'request_roll':
-      return executeRoll(block.input as RequestRollInput, sessionId);
+    case 'request_roll': {
+      const p = parseToolInput(rollSchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      return executeRoll(p.data as RequestRollInput, sessionId);
+    }
     case 'recall_memory': {
-      const q = (block.input as { query: string }).query;
+      const p = parseToolInput(recallSchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      const q = p.data.query;
       const campaignId = await campaignIdOfSession(sessionId);
       if (!campaignId) return { result: { context: 'Session invalide.' }, events: [] };
       try {
@@ -194,7 +296,9 @@ async function executeTool(
       }
     }
     case 'record_entity': {
-      const input = block.input as RecordEntityInput;
+      const p = parseToolInput(recordEntitySchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      const input: RecordEntityInput = p.data;
       const campaignId = await campaignIdOfSession(sessionId);
       if (!campaignId) return { result: { ok: false, error: 'Session invalide.' }, events: [] };
       const supabase = createSupabaseServiceClient();
@@ -227,43 +331,36 @@ async function executeTool(
       };
     }
     case 'grant_item': {
-      const input = block.input as {
-        character_id: string;
-        name: string;
-        qty: number;
-        type?: 'weapon' | 'armor' | 'tool' | 'consumable' | 'treasure' | 'misc';
-        description?: string;
-      };
+      const p = parseToolInput(grantItemSchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      const input = p.data;
       if (!(await characterInSession(sessionId, input.character_id))) {
         return { result: { error: 'Cible hors campagne' }, events: [] };
       }
       return await grantItemToCharacter(input);
     }
     case 'adjust_currency': {
-      const input = block.input as {
-        character_id: string;
-        cp?: number;
-        sp?: number;
-        ep?: number;
-        gp?: number;
-        pp?: number;
-      };
+      const p = parseToolInput(adjustCurrencySchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      const input = p.data;
       if (!(await characterInSession(sessionId, input.character_id))) {
         return { result: { error: 'Cible hors campagne' }, events: [] };
       }
       return await adjustCharacterCurrency(input);
     }
     case 'prompt_companion': {
-      const input = block.input as { character_id: string; hint?: string };
+      const p = parseToolInput(promptCompanionSchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      const input = p.data;
       if (!(await characterInSession(sessionId, input.character_id))) {
         return { result: { error: 'Cible hors campagne' }, events: [] };
       }
       return executeCompanion(input, sessionId);
     }
     case 'start_combat': {
-      const input = block.input as {
-        npcs: Array<{ name: string; ac: number; hp: number; dex_mod?: number }>;
-      };
+      const p = parseToolInput(startCombatSchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      const input = p.data;
       const supabase = createSupabaseServiceClient();
       const { data: session } = await supabase
         .from('sessions')
@@ -296,7 +393,9 @@ async function executeTool(
       };
     }
     case 'apply_damage': {
-      const input = block.input as { combatant_id: string; amount: number };
+      const p = parseToolInput(applyDamageSchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      const input = p.data;
       if (!(await combatantBelongsToSession(sessionId, input.combatant_id))) {
         return { result: { error: 'Cible hors campagne' }, events: [] };
       }
@@ -316,11 +415,11 @@ async function executeTool(
       return await applyDamageToCharacter(input.combatant_id, input.amount);
     }
     case 'apply_condition': {
-      const input = block.input as {
-        combatant_id: string;
-        condition: ConditionType;
-        add: boolean;
-        duration_rounds?: number;
+      const p = parseToolInput(applyConditionSchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      const input = {
+        ...p.data,
+        condition: p.data.condition as ConditionType,
       };
       if (!(await combatantBelongsToSession(sessionId, input.combatant_id))) {
         return { result: { error: 'Cible hors campagne' }, events: [] };
