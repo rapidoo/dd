@@ -1,3 +1,4 @@
+import { isDebugCommand, runDebugCommand } from '../../../../../lib/ai/debug-mode';
 import { runGmTurn } from '../../../../../lib/ai/gm-agent';
 import { createSupabaseServerClient } from '../../../../../lib/db/server';
 import type { CharacterRow, MessageRow } from '../../../../../lib/db/types';
@@ -78,18 +79,26 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
       const fullText: string[] = [];
       try {
-        const effectiveMessage =
-          trigger === 'companion_spoke'
-            ? "(Un compagnon vient de parler ci-dessus. Réagis brièvement en tant que MJ : décris la réaction des autres autour du feu, ou enchaîne la scène, sans répéter ce qu'il a dit.)"
-            : userMessage;
-        for await (const ev of runGmTurn({
-          sessionId,
-          userMessage: effectiveMessage,
-          history: (history ?? []) as MessageRow[],
-          player,
-          companions,
-          worldSummary: campaign?.world_summary ?? null,
-        })) {
+        // /debug <subcommand> short-circuits the LLM entirely — fast UI
+        // smoke test without spending tokens. Only honored in non-prod.
+        const debugAllowed = process.env.NODE_ENV !== 'production';
+        const debug = debugAllowed && isDebugCommand(userMessage);
+
+        const iterator = debug
+          ? runDebugCommand(sessionId, userMessage)
+          : runGmTurn({
+              sessionId,
+              userMessage:
+                trigger === 'companion_spoke'
+                  ? "(Un compagnon vient de parler ci-dessus. Réagis brièvement en tant que MJ : décris la réaction des autres autour du feu, ou enchaîne la scène, sans répéter ce qu'il a dit.)"
+                  : userMessage,
+              history: (history ?? []) as MessageRow[],
+              player,
+              companions,
+              worldSummary: campaign?.world_summary ?? null,
+            });
+
+        for await (const ev of iterator) {
           if (ev.type === 'text_delta') {
             fullText.push(ev.delta);
             write('delta', { text: ev.delta });
