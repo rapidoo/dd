@@ -22,11 +22,16 @@ const ANTHROPIC_DEFAULTS: Record<LlmRole, string> = {
   util: 'claude-haiku-4-5',
 };
 
+// All-Gemma 4 defaults, mapped by power tier :
+//   builder → 31b (18GB) pour la création de campagne/persona
+//   gm      → 26b (18GB) pour la narration en session
+//   companion → e4b (9.6GB, variant "latest")
+//   util    → e2b (7.2GB) pour concierge/summary
 const OLLAMA_DEFAULTS: Record<LlmRole, string> = {
-  builder: 'gemma3:27b',
-  gm: 'gemma3:12b',
-  companion: 'gemma3:4b',
-  util: 'gemma3:4b',
+  builder: 'gemma4:31b',
+  gm: 'gemma4:26b',
+  companion: 'gemma4:e4b',
+  util: 'gemma4:e2b',
 };
 
 /** Resolve the model name for a role — env override falls back to provider default. */

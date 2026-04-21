@@ -66,6 +66,7 @@ export class LlmError extends Error {
     public readonly code:
       | 'ollama_unreachable'
       | 'model_missing'
+      | 'model_no_tool_support'
       | 'bad_response'
       | 'provider_error',
     message: string,

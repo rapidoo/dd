@@ -64,6 +64,13 @@ export function createOllamaProvider(modelFor: (req: ChatRequest) => string): Ll
             { model, body: text },
           );
         }
+        if (/does not support tools/i.test(text)) {
+          throw new LlmError(
+            'model_no_tool_support',
+            `Model "${model}" doesn't support tool calling under Ollama. Use a tool-capable model (qwen2.5, mistral-nemo, llama3.1+, command-r-plus) for the GM role — set LLM_MODEL_GM accordingly.`,
+            { model, body: text },
+          );
+        }
         throw new LlmError('provider_error', `Ollama HTTP ${response.status}: ${text}`, { model });
       }
 

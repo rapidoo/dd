@@ -236,6 +236,27 @@ describe('createOllamaProvider — fetch wiring', () => {
     ).rejects.toMatchObject({ code: 'model_missing' });
   });
 
+  it('maps "does not support tools" error to LlmError("model_no_tool_support")', async () => {
+    global.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: 'registry.ollama.ai/library/gemma3:12b does not support tools',
+          }),
+          { status: 400 },
+        ),
+    ) as typeof fetch;
+    const provider = createOllamaProvider(() => 'gemma3:12b');
+    await expect(
+      provider.chat({
+        role: 'gm',
+        messages: [{ role: 'user', content: 'x' }],
+        tools: [{ name: 't', description: 'd', inputSchema: { type: 'object' } }],
+        maxTokens: 10,
+      }),
+    ).rejects.toMatchObject({ code: 'model_no_tool_support' });
+  });
+
   it('maps network errors to LlmError("ollama_unreachable")', async () => {
     global.fetch = vi.fn(async () => {
       throw new Error('ECONNREFUSED');
