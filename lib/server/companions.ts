@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { createSupabaseServerClient } from '../db/server';
 import type { CharacterRow } from '../db/types';
@@ -78,5 +79,5 @@ export async function createCompanion(
     .single();
   if (error || !data) return { ok: false, error: error?.message ?? 'Création impossible' };
   revalidatePath(`/campaigns/${parsed.data.campaignId}/team`);
-  return { ok: true, data };
+  redirect(`/campaigns/${parsed.data.campaignId}/team`);
 }
