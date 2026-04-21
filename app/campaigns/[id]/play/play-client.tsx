@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState, useTransition } from 'react';
+import { DiceCard, type DiceCardProps } from '../../../../components/session/dice-card';
 import { Message, TypingIndicator } from '../../../../components/session/message';
 import { SessionSidebar } from '../../../../components/session/sidebar';
 import { BtnPrimary } from '../../../../components/ui/button';
-import { DiceOverlay, type DiceOverlayState } from '../../../../components/ui/dice-overlay';
 import { SlotRow, Stat } from '../../../../components/ui/stat';
 import type { CharacterRow, MessageRow } from '../../../../lib/db/types';
 import { promptCompanion } from '../../../../lib/server/companion-actions';
@@ -19,15 +19,23 @@ interface Props {
   companions: CharacterRow[];
 }
 
-interface DisplayMessage {
-  id: string;
-  authorKind: 'user' | 'gm' | 'companion';
-  authorName: string;
-  content: string;
-  time: string;
-  streaming?: boolean;
-  color?: string;
-}
+type DisplayMessage =
+  | {
+      kind: 'msg';
+      id: string;
+      authorKind: 'user' | 'gm' | 'companion';
+      authorName: string;
+      content: string;
+      time: string;
+      streaming?: boolean;
+      color?: string;
+    }
+  | {
+      kind: 'dice';
+      id: string;
+      time: string;
+      card: DiceCardProps;
+    };
 
 export function PlayClient({
   campaignName,
@@ -43,8 +51,6 @@ export function PlayClient({
   );
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
-  const [dice, setDice] = useState<DiceOverlayState | null>(null);
-  const [rolling, setRolling] = useState(false);
   const [isPending, startTransition] = useTransition();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -65,7 +71,7 @@ export function PlayClient({
     const tempId = `u-${Date.now()}`;
     setMessages((m) => [
       ...m,
-      { id: tempId, authorKind: 'user', authorName: playerName(), content, time: now },
+      { kind: 'msg', id: tempId, authorKind: 'user', authorName: playerName(), content, time: now },
     ]);
 
     startTransition(async () => {
@@ -74,6 +80,7 @@ export function PlayClient({
         setMessages((m) => [
           ...m,
           {
+            kind: 'msg',
             id: `err-${Date.now()}`,
             authorKind: 'gm',
             authorName: 'Système',
@@ -103,7 +110,15 @@ export function PlayClient({
     const gmId = `gm-${Date.now()}`;
     setMessages((m) => [
       ...m,
-      { id: gmId, authorKind: 'gm', authorName: 'Le Conteur', content: '', time, streaming: true },
+      {
+        kind: 'msg',
+        id: gmId,
+        authorKind: 'gm',
+        authorName: 'Le Conteur',
+        content: '',
+        time,
+        streaming: true,
+      },
     ]);
     try {
       const response = await fetch(url);
@@ -122,9 +137,7 @@ export function PlayClient({
           if (!ev) continue;
           if (ev.event === 'delta') {
             const text = (ev.data as { text: string }).text;
-            setMessages((m) =>
-              m.map((msg) => (msg.id === gmId ? { ...msg, content: msg.content + text } : msg)),
-            );
+            setMessages((m) => appendToMsg(m, gmId, text));
           } else if (ev.event === 'companion') {
             const comp = ev.data as { characterId: string; name: string; content: string };
             const now = new Date().toLocaleTimeString('fr-FR', {
@@ -134,6 +147,7 @@ export function PlayClient({
             setMessages((m) => [
               ...m,
               {
+                kind: 'msg',
                 id: `c-${Date.now()}-${comp.characterId}`,
                 authorKind: 'companion',
                 authorName: comp.name,
@@ -155,58 +169,28 @@ export function PlayClient({
               dc?: number;
               targetAC?: number;
             };
-            showDice(roll);
+            setMessages((m) => [...m, diceMsg(roll)]);
           } else if (ev.event === 'error') {
-            const msg = (ev.data as { message: string }).message;
-            setMessages((m) =>
-              m.map((x) => (x.id === gmId ? { ...x, content: `${x.content}\n⚠ ${msg}` } : x)),
-            );
+            const errText = (ev.data as { message: string }).message;
+            setMessages((m) => appendToMsg(m, gmId, `\n⚠ ${errText}`));
           }
         }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erreur de streaming';
       setMessages((m) =>
-        m.map((x) => (x.id === gmId ? { ...x, content: `⚠ ${message}`, streaming: false } : x)),
+        m.map((x) =>
+          x.kind === 'msg' && x.id === gmId
+            ? { ...x, content: `⚠ ${message}`, streaming: false }
+            : x,
+        ),
       );
     } finally {
       setTyping(false);
-      setMessages((m) => m.map((x) => (x.id === gmId ? { ...x, streaming: false } : x)));
+      setMessages((m) =>
+        m.map((x) => (x.kind === 'msg' && x.id === gmId ? { ...x, streaming: false } : x)),
+      );
     }
-  }
-
-  function showDice(roll: {
-    dice: number[];
-    modifier: number;
-    total: number;
-    kind: string;
-    label?: string;
-    outcome: string | null;
-    advantage: 'normal' | 'advantage' | 'disadvantage';
-    expression: string;
-    dc?: number;
-    targetAC?: number;
-  }) {
-    const faces = inferFaces(roll.expression);
-    const diceArray = roll.dice.map((value) => ({ faces, value }));
-    const primaryD20 = faces === 20 ? roll.dice[0] : undefined;
-    setDice({
-      dice: diceArray,
-      modifier: roll.modifier,
-      label: roll.label?.trim() || defaultLabel(roll.kind),
-      kind: normalizeKind(roll.kind),
-      keptD20: primaryD20,
-      allD20: faces === 20 ? roll.dice : undefined,
-      advantage: roll.advantage,
-      total: roll.total,
-      critical: roll.outcome === 'crit',
-      fumble: roll.outcome === 'fumble',
-      dc: roll.dc,
-      targetAC: roll.targetAC,
-      outcome: roll.outcome,
-    });
-    setRolling(true);
-    setTimeout(() => setRolling(false), 1000);
   }
 
   return (
@@ -245,26 +229,34 @@ export function PlayClient({
                   Le feu crépite. Le Conteur te regarde. Que racontes-tu&nbsp;?
                 </p>
               )}
-              {messages.map((m) => (
-                <Message
-                  key={m.id}
-                  author={{
-                    kind:
-                      m.authorKind === 'gm'
-                        ? 'gm'
-                        : m.authorKind === 'companion'
-                          ? 'companion'
-                          : 'user',
-                    name: m.authorName,
-                    glyph:
-                      m.authorKind === 'gm' ? '⚜' : m.authorKind === 'companion' ? '◉' : undefined,
-                    color: m.color,
-                  }}
-                  text={renderNarration(m.content)}
-                  time={m.time}
-                  mode={m.authorKind === 'user' ? 'action' : 'narration'}
-                />
-              ))}
+              {messages.map((m) =>
+                m.kind === 'dice' ? (
+                  <DiceCard key={m.id} {...m.card} />
+                ) : (
+                  <Message
+                    key={m.id}
+                    author={{
+                      kind:
+                        m.authorKind === 'gm'
+                          ? 'gm'
+                          : m.authorKind === 'companion'
+                            ? 'companion'
+                            : 'user',
+                      name: m.authorName,
+                      glyph:
+                        m.authorKind === 'gm'
+                          ? '⚜'
+                          : m.authorKind === 'companion'
+                            ? '◉'
+                            : undefined,
+                      color: m.color,
+                    }}
+                    text={renderNarration(m.content)}
+                    time={m.time}
+                    mode={m.authorKind === 'user' ? 'action' : 'narration'}
+                  />
+                ),
+              )}
               {typing && <TypingIndicator who="Le Conteur" />}
             </div>
 
@@ -308,6 +300,7 @@ export function PlayClient({
                   setMessages((m) => [
                     ...m,
                     {
+                      kind: 'msg',
                       id: `c-${Date.now()}-${characterId}`,
                       authorKind: 'companion',
                       authorName: res.characterName ?? comp.name,
@@ -323,10 +316,53 @@ export function PlayClient({
           )}
         </div>
       </div>
-
-      <DiceOverlay state={dice} rolling={rolling} onDismiss={() => setDice(null)} />
     </div>
   );
+}
+
+function appendToMsg(messages: DisplayMessage[], id: string, text: string): DisplayMessage[] {
+  return messages.map((m) =>
+    m.kind === 'msg' && m.id === id ? { ...m, content: m.content + text } : m,
+  );
+}
+
+function diceMsg(roll: {
+  dice: number[];
+  modifier: number;
+  total: number;
+  kind: string;
+  label?: string;
+  outcome: string | null;
+  advantage: 'normal' | 'advantage' | 'disadvantage';
+  expression: string;
+  dc?: number;
+  targetAC?: number;
+}): Extract<DisplayMessage, { kind: 'dice' }> {
+  const faces = inferFaces(roll.expression);
+  const diceArray = roll.dice.map((value) => ({ faces, value }));
+  const primaryD20 = faces === 20 ? roll.dice[0] : undefined;
+  const time = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  return {
+    kind: 'dice',
+    id: `d-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    time,
+    card: {
+      label: roll.label?.trim() || defaultLabel(roll.kind),
+      kind: normalizeKind(roll.kind),
+      dice: diceArray,
+      modifier: roll.modifier,
+      total: roll.total,
+      keptD20: primaryD20,
+      allD20: faces === 20 ? roll.dice : undefined,
+      advantage: roll.advantage,
+      outcome: roll.outcome,
+      dc: roll.dc,
+      targetAC: roll.targetAC,
+      critical: roll.outcome === 'crit',
+      fumble: roll.outcome === 'fumble',
+      time,
+    },
+  };
 }
 
 const COMPANION_COLORS = ['#c47a3a', '#a86a9a', '#4a6a8a', '#6a7a3a', '#6a5a8a'];
@@ -485,29 +521,29 @@ function renderNarration(raw: string) {
 }
 
 function toDisplay(m: MessageRow, companions: Map<string, CharacterRow>): DisplayMessage {
+  const time = new Date(m.created_at).toLocaleTimeString('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
   if (m.author_kind === 'character' && m.author_id) {
     const comp = companions.get(m.author_id);
     return {
+      kind: 'msg',
       id: m.id,
       authorKind: 'companion',
       authorName: comp?.name ?? 'Compagnon',
       content: m.content,
-      time: new Date(m.created_at).toLocaleTimeString('fr-FR', {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
+      time,
       color: '#c47a3a',
     };
   }
   return {
+    kind: 'msg',
     id: m.id,
     authorKind: m.author_kind === 'user' ? 'user' : 'gm',
     authorName: m.author_kind === 'user' ? 'Toi' : 'Le Conteur',
     content: m.content,
-    time: new Date(m.created_at).toLocaleTimeString('fr-FR', {
-      hour: '2-digit',
-      minute: '2-digit',
-    }),
+    time,
   };
 }
 

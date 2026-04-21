@@ -74,8 +74,8 @@ test.describe('Session play page', () => {
       timeout: 8000,
     });
 
-    // Dice overlay appeared with total 17
-    await expect(page.getByText('17', { exact: true })).toBeVisible({ timeout: 8000 });
-    await expect(page.getByText(/TEST DE CARAC/i)).toBeVisible();
+    // Inline dice card rendered with total 17 + kind label
+    await expect(page.getByText('17', { exact: true }).first()).toBeVisible({ timeout: 8000 });
+    await expect(page.getByText(/TEST/).first()).toBeVisible();
   });
 });
