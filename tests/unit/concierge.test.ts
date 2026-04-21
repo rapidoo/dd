@@ -4,9 +4,10 @@ import type { CharacterRow } from '../../lib/db/types';
 const PLAYER_ID = '00000000-0000-0000-0000-000000000001';
 const COMPANION_ID = '00000000-0000-0000-0000-000000000002';
 
-// Neo4j mock — track entity + session upserts and APPEARS_IN links
+// Neo4j mock — track every write kind so tests can assert graph shape
 const entityUpserts: Array<Record<string, unknown>> = [];
 const sessionUpserts: Array<Record<string, unknown>> = [];
+const factUpserts: Array<Record<string, unknown>> = [];
 const entitySessionLinks: Array<{ entityId: string; sessionId: string }> = [];
 vi.mock('../../lib/neo4j/queries', () => ({
   upsertEntityNode: async (e: Record<string, unknown>) => {
@@ -14,6 +15,9 @@ vi.mock('../../lib/neo4j/queries', () => ({
   },
   upsertSessionNode: async (s: Record<string, unknown>) => {
     sessionUpserts.push(s);
+  },
+  upsertFactNode: async (f: Record<string, unknown>) => {
+    factUpserts.push(f);
   },
   linkEntityToSession: async (entityId: string, sessionId: string) => {
     entitySessionLinks.push({ entityId, sessionId });
@@ -118,6 +122,7 @@ describe('runConcierge', () => {
   beforeEach(() => {
     entityUpserts.length = 0;
     sessionUpserts.length = 0;
+    factUpserts.length = 0;
     entitySessionLinks.length = 0;
     updates.length = 0;
     for (const k of Object.keys(charState)) delete charState[k];
@@ -230,6 +235,65 @@ describe('runConcierge', () => {
     expect(charState[PLAYER_ID]?.currency?.gp).toBe(20);
     expect((charState[COMPANION_ID]?.inventory as unknown[]).length).toBe(1);
     expect(charState[COMPANION_ID]?.currency?.gp).toBe(10);
+  });
+
+  it('persists facts attached to the entity they describe', async () => {
+    haikuResponse = JSON.stringify({
+      entities: [{ kind: 'npc', name: 'Vaeloria', short_description: 'Druidesse' }],
+      facts: [
+        {
+          about_entity_name: 'Vaeloria',
+          kind: 'promise',
+          text: "Vaeloria a juré de protéger Razmoo jusqu'à la Porte Verte.",
+        },
+        {
+          about_entity_name: 'Vaeloria',
+          kind: 'behavior',
+          text: 'Vaeloria se méfie des humains armés.',
+        },
+      ],
+      loot: [],
+    });
+    await runConcierge({
+      campaignId: 'c1',
+      sessionId: 's1',
+      sessionNumber: 1,
+      narration:
+        "Vaeloria pose sa main sur l'épaule du nain, jure de le protéger, puis surveille les humains du coin de l'œil.",
+      player: mkCharacter(PLAYER_ID, false),
+      companions: [mkCharacter(COMPANION_ID, true)],
+    });
+    expect(entityUpserts).toHaveLength(1);
+    expect(factUpserts).toHaveLength(2);
+    expect(factUpserts[0]).toMatchObject({
+      kind: 'promise',
+      session_id: 's1',
+      campaign_id: 'c1',
+    });
+    expect(factUpserts[0]?.entity_id).toBe(entityUpserts[0]?.id);
+  });
+
+  it('skips facts when the named entity is unknown', async () => {
+    haikuResponse = JSON.stringify({
+      entities: [],
+      facts: [
+        {
+          about_entity_name: 'Personne Inconnu',
+          kind: 'behavior',
+          text: 'fact orphelin',
+        },
+      ],
+      loot: [],
+    });
+    await runConcierge({
+      campaignId: 'c1',
+      sessionId: 's1',
+      sessionNumber: 1,
+      narration: 'Un long texte de narration sans entité nommée pour déclencher le concierge.',
+      player: mkCharacter(PLAYER_ID, false),
+      companions: [],
+    });
+    expect(factUpserts).toHaveLength(0);
   });
 
   it('persists weapon metadata for attack computation', async () => {

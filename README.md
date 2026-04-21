@@ -7,7 +7,7 @@ Plateforme web permettant de jouer à Donjons & Dragons 5e en solo avec un MJ IA
 
 - **Front** : Next.js 16 (App Router) · React 19 · TypeScript strict · Tailwind v4
 - **Back** : Next.js Server Actions · Route Handlers (SSE)
-- **Data** : Supabase Postgres (RLS) · Neo4j AuraDB (mémoire graphe)
+- **Data** : Supabase Postgres (état transactionnel, RLS) · Neo4j AuraDB (mémoire de campagne — entités, sessions, faits narratifs)
 - **LLM** : abstraction multi-provider (`lib/ai/llm/`) — **Anthropic** (stable) ou **Ollama / Gemma 4** (expérimental, dev-only)
 - **Validation** : Zod · **Tests** : Vitest · **Lint** : Biome
 

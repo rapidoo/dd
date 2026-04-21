@@ -3,9 +3,11 @@ import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow } from '../db/types';
 import {
   type EntityKind,
+  type FactKind,
   findEntityByName,
   linkEntityToSession,
   upsertEntityNode,
+  upsertFactNode,
   upsertSessionNode,
 } from '../neo4j/queries';
 import type { InventoryItem } from '../server/inventory-actions';
@@ -23,6 +25,15 @@ import { llm } from './llm';
 
 const itemTypeEnum = z.enum(['weapon', 'armor', 'tool', 'consumable', 'treasure', 'misc']);
 const abilityEnum = z.enum(['str', 'dex', 'finesse']);
+const factKindEnum = z.enum([
+  'behavior',
+  'relation',
+  'possession',
+  'promise',
+  'secret',
+  'event',
+  'rule',
+]);
 
 const lootSchema = z.object({
   entities: z
@@ -31,6 +42,16 @@ const lootSchema = z.object({
         kind: z.enum(['npc', 'location', 'faction', 'item', 'quest', 'event']),
         name: z.string().trim().min(1).max(120),
         short_description: z.string().trim().max(400).optional(),
+      }),
+    )
+    .max(12)
+    .default([]),
+  facts: z
+    .array(
+      z.object({
+        about_entity_name: z.string().trim().min(1).max(120),
+        kind: factKindEnum,
+        text: z.string().trim().min(1).max(400),
       }),
     )
     .max(12)
@@ -94,10 +115,15 @@ export async function runConcierge(input: ConciergeInput): Promise<void> {
 
   const payload = await extract(input, party);
   if (!payload) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.debug(
+      `[concierge] payload entities=${payload.entities.length} facts=${payload.facts.length} loot=${payload.loot.length}`,
+    );
+  }
 
-  // Entities → Neo4j (source of truth for campaign memory)
-  if (payload.entities.length > 0) {
-    await persistEntitiesToGraph(input, payload.entities).catch((err) => {
+  // Entities + facts → Neo4j (source of truth for campaign memory)
+  if (payload.entities.length > 0 || payload.facts.length > 0) {
+    await persistMemoryToGraph(input, payload).catch((err) => {
       logConciergeFailure('neo4j_error', {
         message: err instanceof Error ? err.message : String(err),
       });
@@ -113,17 +139,18 @@ export async function runConcierge(input: ConciergeInput): Promise<void> {
   }
 }
 
-async function persistEntitiesToGraph(
+async function persistMemoryToGraph(
   input: ConciergeInput,
-  entities: ConciergePayload['entities'],
+  payload: ConciergePayload,
 ): Promise<void> {
-  // Make sure the Session node exists once, then MERGE each entity and link it.
+  // Session node once — every Entity / Fact edge anchors on it.
   await upsertSessionNode({
     id: input.sessionId,
     campaign_id: input.campaignId,
     session_number: input.sessionNumber,
   });
-  for (const e of entities) {
+  const entityIdByName = new Map<string, string>();
+  for (const e of payload.entities) {
     const existing = await findEntityByName(input.campaignId, e.kind as EntityKind, e.name);
     const id = existing?.id ?? crypto.randomUUID();
     await upsertEntityNode({
@@ -134,8 +161,46 @@ async function persistEntitiesToGraph(
       short_description: e.short_description,
     });
     await linkEntityToSession(id, input.sessionId);
+    entityIdByName.set(e.name.toLowerCase(), id);
+  }
+
+  // Facts attach to an Entity — resolve by name among the entities we just
+  // persisted OR any pre-existing entity in the campaign. Unresolved names
+  // are skipped (we never invent anchors).
+  for (const f of payload.facts) {
+    const key = f.about_entity_name.toLowerCase();
+    let entityId = entityIdByName.get(key);
+    if (!entityId) {
+      // Try every kind until we find one; campaign isolation is still enforced
+      // by findEntityByName.
+      for (const kind of ENTITY_KINDS_FOR_FACT_LOOKUP) {
+        const hit = await findEntityByName(input.campaignId, kind, f.about_entity_name);
+        if (hit) {
+          entityId = hit.id;
+          break;
+        }
+      }
+    }
+    if (!entityId) continue;
+    await upsertFactNode({
+      id: crypto.randomUUID(),
+      campaign_id: input.campaignId,
+      entity_id: entityId,
+      session_id: input.sessionId,
+      kind: f.kind as FactKind,
+      text: f.text,
+    });
   }
 }
+
+const ENTITY_KINDS_FOR_FACT_LOOKUP: EntityKind[] = [
+  'npc',
+  'location',
+  'faction',
+  'item',
+  'quest',
+  'event',
+];
 
 async function extract(
   input: ConciergeInput,
@@ -153,46 +218,35 @@ async function extract(
       messages: [
         {
           role: 'user',
-          content: `Tu es le concierge mécanique d'une partie de D&D 5e. Lis la narration finale du Conteur et extrais UNIQUEMENT deux choses au format JSON :
+          content: `Tu es le concierge mécanique d'une partie de D&D 5e. Lis la narration finale du Conteur et extrais TROIS choses au format JSON :
 
-1) "entities" : entités nommées notables (PNJ, lieux, factions, objets, quêtes, événements) pour la mémoire de campagne.
-2) "loot" : opérations d'inventaire et de bourse explicitement narrées — objets ramassés/donnés/perdus, pièces gagnées/dépensées.
+1) "entities" — chaque fois qu'un PNJ, lieu, faction, objet NOMMÉ, quête ou événement notable est mentionné, cite-le. Tu DOIS lister même les entités déjà connues (le système dédoublonne côté graphe). Ignore seulement les foules anonymes ("des gardes", "une taverne sans nom").
+2) "facts" — propositions narratives apprises ou confirmées pendant ce tour. Attache chaque fait à une entité (about_entity_name doit matcher un name de "entities" ou d'une entité déjà en mémoire). Exemples : "Vaeloria se méfie des humains" (behavior) ; "Razmoo a juré de protéger Aldric" (promise) ; "Le Maître Gris est en réalité Malkron" (secret).
+3) "loot" — objets et pièces EXPLICITEMENT ramassés / donnés / dépensés par un PJ ou compagnon.
 
-Réponds STRICTEMENT en JSON (pas de markdown, pas de commentaires) :
+Réponds STRICTEMENT en JSON :
 {
   "entities": [{"kind":"npc|location|faction|item|quest|event","name":"...","short_description":"..."}],
+  "facts": [{"about_entity_name":"...","kind":"behavior|relation|possession|promise|secret|event|rule","text":"..."}],
   "loot": [
     {
-      "character_id": "<uuid du bénéficiaire ou du perdant>",
-      "items": [
-        {
-          "name":"...",
-          "qty": 1,            // >0 = reçoit, <0 = perd
-          "type":"weapon|armor|tool|consumable|treasure|misc",
-          "description":"courte, optionnelle",
-          "weapon": {            // UNIQUEMENT si type=weapon ET stats connues
-            "damage_dice":"1d8",
-            "damage_type":"contondant",
-            "ability":"str|dex|finesse",
-            "ranged": false
-          }
-        }
-      ],
-      "currency": { "gp": 47, "sp": 12, "pp": 3 }  // positif = gagne, négatif = dépense
+      "character_id":"<uuid de la liste ci-dessous>",
+      "items":[{"name":"...","qty":1,"type":"weapon|armor|tool|consumable|treasure|misc","description":"optionnelle","weapon":{"damage_dice":"1d8","damage_type":"contondant","ability":"str|dex|finesse","ranged":false}}],
+      "currency":{"gp":47,"sp":12,"pp":3}
     }
   ]
 }
 
-Personnages disponibles (n'invente pas d'UUID, ignore ceux hors liste) :
+Personnages disponibles (n'invente pas d'UUID) :
 ${partyLines}
 
 Règles :
-- N'inclure que ce qui est EXPLICITEMENT narré comme un transfert (ramassé, donné, volé, acheté, dépensé). Pas les objets simplement décrits ou rêvés.
-- Si la narration dit "le partage", répartis selon ce que dit le texte. Sinon, attribue au joueur principal par défaut.
-- Pour une arme, remplis weapon avec les stats standard D&D si le nom est clair (ex: poignard=1d4 perforant finesse, marteau de guerre=1d8 contondant str, arc court=1d6 perforant ranged=true). Si inconnu, omets weapon.
-- Nombres écrits en lettres ("quarante-sept", "douze") → convertis en chiffres.
-- Max 12 entités, max 12 opérations de butin, chacune avec au plus 12 items.
-- Si rien à persister, renvoie {"entities":[],"loot":[]}.
+- entities : sois généreux sur les noms propres, avare sur les génériques. Si un PNJ n'a qu'un surnom ("le cultiste"), ne le cite que s'il est distinct et récurrent.
+- facts : ne recopie pas la narration — résume en 1 phrase un fait durable (max 200 chars). Pas de "il a dit", "elle fait un geste" (événement d'un tour ≠ fait durable).
+- loot : uniquement un VRAI transfert (ramassé, donné, volé, acheté, dépensé). Pas les objets simplement décrits. Nombres en lettres → chiffres.
+- Pour une arme, weapon={damage_dice, damage_type, ability, ranged?} si les stats sont canoniques (dague 1d4/perforant/finesse, marteau 1d8/contondant/str, arc court 1d6/perforant/ranged).
+- Max 12 entités, 12 faits, 12 loot ops.
+- Rien à persister ? Renvoie {"entities":[],"facts":[],"loot":[]}.
 
 Narration :
 ${input.narration.slice(0, 3000)}

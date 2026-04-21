@@ -34,8 +34,10 @@ const driver = neo4j.driver(uri, neo4j.auth.basic(user, password), {
 });
 
 const CONSTRAINTS = [
+  'CREATE CONSTRAINT campaign_id_unique IF NOT EXISTS FOR (n:Campaign) REQUIRE n.id IS UNIQUE',
   'CREATE CONSTRAINT entity_id_unique IF NOT EXISTS FOR (n:Entity) REQUIRE n.id IS UNIQUE',
   'CREATE CONSTRAINT session_id_unique IF NOT EXISTS FOR (n:Session) REQUIRE n.id IS UNIQUE',
+  'CREATE CONSTRAINT fact_id_unique IF NOT EXISTS FOR (n:Fact) REQUIRE n.id IS UNIQUE',
 ];
 const INDEXES = [
   'CREATE INDEX entity_lookup IF NOT EXISTS FOR (n:Entity) ON (n.campaign_id, n.kind, n.name)',
@@ -58,20 +60,35 @@ async function main() {
     }
 
     const counts = await session.run(
-      'MATCH (n:Entity) RETURN n.campaign_id AS campaign_id, count(n) AS total ORDER BY total DESC',
+      `MATCH (c:Campaign)
+       OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e:Entity)
+       WITH c, count(DISTINCT e) AS entities
+       OPTIONAL MATCH (c)-[:HAS_SESSION]->(s:Session)
+       WITH c, entities, count(DISTINCT s) AS sessions
+       OPTIONAL MATCH (c)-[:HAS_FACT]->(f:Fact)
+       RETURN c.id AS campaign_id, entities, sessions, count(DISTINCT f) AS facts
+       ORDER BY entities DESC`,
     );
     if (counts.records.length === 0) {
-      console.log('\n📭 Aucune entité en base. Joue un tour de session pour les déclencher.');
+      console.log(
+        '\n📭 Aucune campagne en base. Joue un tour de session pour déclencher le concierge.',
+      );
     } else {
-      console.log('\n📊 Entités par campagne :');
+      console.log('\n📊 Par campagne (entités · sessions · faits) :');
       for (const r of counts.records) {
-        console.log(`   ${r.get('campaign_id') ?? '(null)'}: ${r.get('total')}`);
+        console.log(
+          `   ${r.get('campaign_id')} — ${r.get('entities')} · ${r.get('sessions')} · ${r.get('facts')}`,
+        );
       }
     }
 
-    const total = await session.run('MATCH (n:Entity) RETURN count(n) AS total');
-    const totalCount = total.records[0]?.get('total') ?? 0;
-    console.log(`\nTotal : ${totalCount} Entity nodes.`);
+    const totals = await session.run(
+      `MATCH (n) WHERE n:Campaign OR n:Entity OR n:Session OR n:Fact
+       RETURN labels(n)[0] AS label, count(n) AS total
+       ORDER BY label`,
+    );
+    console.log('\nTotaux par type de nœud :');
+    for (const r of totals.records) console.log(`   ${r.get('label')}: ${r.get('total')}`);
   } finally {
     await session.close();
     await driver.close();

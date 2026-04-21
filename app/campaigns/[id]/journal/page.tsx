@@ -14,6 +14,16 @@ const KIND_LABEL: Record<string, string> = {
   event: 'Événement',
 };
 
+const FACT_LABEL: Record<string, string> = {
+  behavior: 'Comportement',
+  relation: 'Relation',
+  possession: 'Possession',
+  promise: 'Engagement',
+  secret: 'Secret',
+  event: 'Événement',
+  rule: 'Règle',
+};
+
 export default async function JournalPage({ params }: { params: Promise<{ id: string }> }) {
   await requireUser();
   const { id } = await params;
@@ -99,6 +109,18 @@ export default async function JournalPage({ params }: { params: Promise<{ id: st
                       .sort((a, b) => a - b)
                       .join(', ')}
                   </p>
+                )}
+                {e.facts.length > 0 && (
+                  <ul className="mt-3 space-y-1 border-t border-line pt-2">
+                    {e.facts.map((f) => (
+                      <li key={f.id} className="font-narr text-xs text-text-mid">
+                        <span className="mr-2 font-mono text-[9px] uppercase tracking-widest text-gold/70">
+                          {FACT_LABEL[f.kind] ?? f.kind}
+                        </span>
+                        {f.text}
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </article>
             ))}
