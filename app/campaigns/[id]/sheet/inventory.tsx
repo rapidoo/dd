@@ -61,7 +61,7 @@ export function InventorySection({
   };
 
   return (
-    <section className="border border-line bg-card p-5">
+    <section id="inventaire" className="border border-line bg-card p-5 scroll-mt-10">
       <p className="mb-3 font-display text-[10px] uppercase tracking-[0.25em] text-gold">
         ◈ Équipement
       </p>

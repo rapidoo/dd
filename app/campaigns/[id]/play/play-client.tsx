@@ -9,6 +9,7 @@ import { BtnPrimary } from '../../../../components/ui/button';
 import { SlotRow, Stat } from '../../../../components/ui/stat';
 import type { CharacterRow, MessageRow } from '../../../../lib/db/types';
 import { promptCompanion } from '../../../../lib/server/companion-actions';
+import type { InventoryItem } from '../../../../lib/server/inventory-actions';
 import { getParty } from '../../../../lib/server/party';
 import { postUserMessage } from '../../../../lib/server/sessions';
 
@@ -519,7 +520,91 @@ function CharacterStats({
             ))}
         </div>
       )}
+      <PurseInline currency={character.currency} />
+      <InventoryInline
+        inventory={character.inventory as InventoryItem[] | null}
+        characterId={character.id}
+        campaignId={campaignId}
+      />
     </section>
+  );
+}
+
+type Currency = CharacterRow['currency'];
+
+const COIN_ORDER: Array<{ key: keyof Currency; symbol: string; color: string }> = [
+  { key: 'pp', symbol: 'pp', color: '#d6e2eb' },
+  { key: 'gp', symbol: 'po', color: '#ecc87a' },
+  { key: 'ep', symbol: 'el', color: '#c4b26a' },
+  { key: 'sp', symbol: 'pa', color: '#c9c9c9' },
+  { key: 'cp', symbol: 'pc', color: '#c47a3a' },
+];
+
+function PurseInline({ currency }: { currency: Currency | null }) {
+  const c = currency ?? { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 };
+  const nonZero = COIN_ORDER.filter(({ key }) => (c[key] ?? 0) > 0);
+  return (
+    <div className="mt-4">
+      <p className="mb-1 text-[10px] uppercase tracking-widest text-text-mute">Bourse</p>
+      {nonZero.length === 0 ? (
+        <p className="font-narr text-[12px] italic text-text-faint">Vide.</p>
+      ) : (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px]">
+          {nonZero.map(({ key, symbol, color }) => (
+            <span key={key} className="inline-flex items-center gap-1">
+              <span className="font-narr text-[14px] text-gold-bright">{c[key]}</span>
+              <span style={{ color }}>{symbol}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InventoryInline({
+  inventory,
+  characterId,
+  campaignId,
+}: {
+  inventory: InventoryItem[] | null;
+  characterId: string;
+  campaignId: string;
+}) {
+  const items = inventory ?? [];
+  const visible = items.slice(0, 4);
+  const hidden = items.length - visible.length;
+  return (
+    <div className="mt-4">
+      <div className="mb-1 flex items-baseline justify-between">
+        <p className="text-[10px] uppercase tracking-widest text-text-mute">
+          Équipement {items.length > 0 && <span className="text-text-faint">· {items.length}</span>}
+        </p>
+        <Link
+          href={`/campaigns/${campaignId}/sheet?character=${characterId}#inventaire`}
+          className="font-ui text-[9px] uppercase tracking-widest text-text-mute hover:text-gold"
+        >
+          Gérer →
+        </Link>
+      </div>
+      {items.length === 0 ? (
+        <p className="font-narr text-[12px] italic text-text-faint">Sac vide.</p>
+      ) : (
+        <ul className="space-y-0.5">
+          {visible.map((item) => (
+            <li key={item.id} className="flex justify-between font-narr text-[12px] text-text">
+              <span className="truncate pr-2">{item.name}</span>
+              <span className="shrink-0 font-mono text-text-mute">×{item.qty}</span>
+            </li>
+          ))}
+          {hidden > 0 && (
+            <li className="font-narr text-[11px] italic text-text-faint">
+              … et {hidden} autre{hidden > 1 ? 's' : ''}
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
   );
 }
 
