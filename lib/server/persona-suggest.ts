@@ -11,10 +11,61 @@ const schema = z.object({
   name: z.string().trim().max(80).optional(),
 });
 
+const nameSchema = z.object({
+  speciesId: z.string().refine((v) => v in SPECIES, 'Espèce inconnue'),
+  classId: z.string().refine((v) => v in CLASSES, 'Classe inconnue'),
+});
+
 export interface PersonaSuggestion {
   ok: boolean;
   text?: string;
   error?: string;
+}
+
+const NAME_SYSTEM = `Tu aides à inventer un nom de personnage pour une partie de D&D 5e en français, style "dark fantasy cozy".
+
+Règles :
+- UNIQUEMENT le nom, rien d'autre. Pas de "Voici" ni de ponctuation terminale.
+- Cohérent avec l'espèce (sonorités d'onomastique naine, elfique, halfeline, etc.).
+- Prénom + surnom ou famille si ça ajoute du grain (ex. « Dorn Ferrecoeur », « Lyra Chantevent »).
+- Pas de nom cliché ou déjà connu (pas de Gimli, Legolas, Bilbo…).
+- Max 40 caractères.`;
+
+export async function suggestName(input: {
+  speciesId: string;
+  classId: string;
+}): Promise<PersonaSuggestion> {
+  const parsed = nameSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: 'Entrée invalide' };
+  await requireUser();
+  const species = SPECIES[parsed.data.speciesId];
+  const klass = CLASSES[parsed.data.classId];
+  if (!species || !klass) return { ok: false, error: 'Données inconnues' };
+  try {
+    const response = await anthropic().messages.create({
+      model: MODELS.UTIL,
+      max_tokens: 40,
+      system: NAME_SYSTEM,
+      messages: [
+        {
+          role: 'user',
+          content: `Propose un nom pour un(e) ${species.name.toLowerCase()} ${klass.name.toLowerCase()}.`,
+        },
+      ],
+    });
+    const text = response.content
+      .filter((b) => b.type === 'text')
+      .map((b) => (b.type === 'text' ? b.text : ''))
+      .join('')
+      .trim()
+      .replace(/^["«]|["»]$/g, '')
+      .replace(/\.$/, '')
+      .trim();
+    if (!text) return { ok: false, error: 'Réponse vide' };
+    return { ok: true, text };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'LLM error' };
+  }
 }
 
 const SYSTEM = `Tu aides à imaginer la personnalité d'un compagnon IA pour une partie de D&D 5e en français, style "dark fantasy cozy".

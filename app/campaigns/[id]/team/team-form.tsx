@@ -6,7 +6,7 @@ import type { CharacterRow } from '../../../../lib/db/types';
 import { CLASSES, SPECIES } from '../../../../lib/rules/srd';
 import type { ServerResult } from '../../../../lib/server/campaigns';
 import { createCompanion } from '../../../../lib/server/companions';
-import { suggestPersona } from '../../../../lib/server/persona-suggest';
+import { suggestName, suggestPersona } from '../../../../lib/server/persona-suggest';
 
 export function TeamForm({ campaignId }: { campaignId: string }) {
   const [state, formAction] = useActionState<ServerResult<CharacterRow> | null, FormData>(
@@ -19,6 +19,8 @@ export function TeamForm({ campaignId }: { campaignId: string }) {
   const [persona, setPersona] = useState('');
   const [suggestPending, startSuggest] = useTransition();
   const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [namePending, startName] = useTransition();
+  const [nameError, setNameError] = useState<string | null>(null);
 
   const askSuggestion = () => {
     setSuggestError(null);
@@ -29,11 +31,32 @@ export function TeamForm({ campaignId }: { campaignId: string }) {
     });
   };
 
+  const askName = () => {
+    setNameError(null);
+    startName(async () => {
+      const res = await suggestName({ speciesId, classId });
+      if (res.ok && res.text) setName(res.text);
+      else setNameError(res.error ?? 'Échec');
+    });
+  };
+
   return (
     <form action={formAction} className="grid gap-4 md:grid-cols-2">
       <input type="hidden" name="campaignId" value={campaignId} />
       <label className="flex flex-col gap-1 text-xs uppercase tracking-[0.2em] text-text-mute">
-        Nom
+        <span className="flex items-center justify-between gap-2">
+          <span>Nom</span>
+          <button
+            type="button"
+            onClick={askName}
+            disabled={namePending}
+            title="Proposer un nom"
+            className="inline-flex items-center gap-1 border border-gold/60 bg-gradient-to-b from-gold-bright/15 to-gold/10 px-2 py-0.5 font-ui text-[10px] uppercase tracking-widest text-gold-bright transition-colors hover:border-gold hover:bg-[rgba(212,166,76,0.18)] disabled:opacity-50"
+          >
+            <span aria-hidden>✎✨</span>
+            <span>{namePending ? '…' : 'Inspire-moi'}</span>
+          </button>
+        </span>
         <input
           name="name"
           type="text"
@@ -44,6 +67,7 @@ export function TeamForm({ campaignId }: { campaignId: string }) {
           className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-lg text-text outline-none focus:border-gold"
           placeholder="Dorn Ferrecoeur"
         />
+        {nameError && <span className="text-xs text-blood">{nameError}</span>}
       </label>
       <label className="flex flex-col gap-1 text-xs uppercase tracking-[0.2em] text-text-mute">
         Espèce
