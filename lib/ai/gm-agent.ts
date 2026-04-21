@@ -1,4 +1,3 @@
-import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow, MessageRow } from '../db/types';
@@ -17,8 +16,9 @@ import {
   toggleCondition,
 } from '../server/combat';
 import type { InventoryItem } from '../server/inventory-actions';
-import { anthropic, MODELS } from './claude';
 import { respondAsCompanion } from './companion-agent';
+import { llm } from './llm';
+import type { ChatMessage, ToolCallOut, ToolResultIn } from './llm/types';
 import { compactHistory } from './rolling-summary';
 import { campaignIdOfSession, characterInSession, combatantBelongsToSession } from './tenant-guard';
 import { GM_TOOLS, type RecordEntityInput, type RequestRollInput } from './tools';
@@ -88,7 +88,7 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
   const campaignId = await campaignIdOfSession(input.sessionId).catch(() => null);
   const knownEntities = campaignId ? await listEntities(campaignId).catch(() => []) : [];
 
-  const messages: Anthropic.Messages.MessageParam[] = tail.map((m) => {
+  const messages: ChatMessage[] = tail.map((m) => {
     if (m.author_kind === 'gm') {
       return { role: 'assistant' as const, content: m.content };
     }
@@ -113,14 +113,14 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
   let safety = 0;
   while (safety < 6) {
     safety++;
-    let response: Anthropic.Messages.Message;
+    let response: Awaited<ReturnType<ReturnType<typeof llm>['chat']>>;
     try {
-      response = await anthropic().messages.create({
-        model: MODELS.GM,
-        max_tokens: 600,
+      response = await llm().chat({
+        role: 'gm',
         system: systemPrompt,
-        tools: GM_TOOLS,
         messages,
+        tools: GM_TOOLS,
+        maxTokens: 600,
       });
     } catch (err) {
       yield { type: 'error', message: err instanceof Error ? err.message : 'LLM error' };
@@ -130,16 +130,13 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     // Safeguard: if the GM delegated a roll to the player without calling
     // request_roll, swallow the text and re-prompt. Inventory/currency is
     // handled separately by the post-turn concierge pass — no guard needed.
-    const textBlocks = response.content.filter((b) => b.type === 'text');
-    const fullText = textBlocks.map((b) => (b as Anthropic.Messages.TextBlock).text).join('');
-    const calledRequestRoll = response.content.some(
-      (b) => b.type === 'tool_use' && b.name === 'request_roll',
-    );
+    const fullText = response.text;
+    const calledRequestRoll = response.toolCalls.some((c) => c.name === 'request_roll');
 
     if (hasRollDelegation(fullText) && !calledRequestRoll) {
       messages.push({
         role: 'assistant',
-        content: [{ type: 'text', text: '(tour rejeté : jet délégué au joueur)' }],
+        content: '(tour rejeté : jet délégué au joueur)',
       });
       messages.push({
         role: 'user',
@@ -149,30 +146,21 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
       continue;
     }
 
-    for (const block of textBlocks) {
-      yield { type: 'text_delta', delta: (block as Anthropic.Messages.TextBlock).text };
-    }
+    if (fullText) yield { type: 'text_delta', delta: fullText };
 
-    if (response.stop_reason !== 'tool_use') {
+    if (response.stopReason !== 'tool_use') {
       yield { type: 'done' };
       return;
     }
 
-    // Run every tool call, then loop.
-    const assistantContent: Anthropic.Messages.ContentBlockParam[] = response.content;
-    messages.push({ role: 'assistant', content: assistantContent });
-    const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
-    for (const block of response.content) {
-      if (block.type !== 'tool_use') continue;
-      const result = await executeTool(block, input.sessionId);
-      toolResults.push({
-        type: 'tool_result',
-        tool_use_id: block.id,
-        content: JSON.stringify(result.result),
-      });
+    messages.push({ role: 'assistant', content: fullText, toolCalls: response.toolCalls });
+    const results: ToolResultIn[] = [];
+    for (const call of response.toolCalls) {
+      const result = await executeTool(call, input.sessionId);
+      results.push({ toolUseId: call.id, content: JSON.stringify(result.result) });
       for (const ev of result.events) yield ev;
     }
-    messages.push({ role: 'user', content: toolResults });
+    messages.push({ role: 'tool', results });
   }
   yield { type: 'error', message: 'Too many tool iterations' };
 }
@@ -293,7 +281,7 @@ function parseToolInput<T>(
 }
 
 async function executeTool(
-  block: Anthropic.Messages.ToolUseBlock,
+  block: ToolCallOut,
   sessionId: string,
 ): Promise<{ result: unknown; events: GmEvent[] }> {
   switch (block.name) {

@@ -1,7 +1,7 @@
 'use server';
 
 import { z } from 'zod';
-import { anthropic, MODELS } from '../ai/claude';
+import { llm } from '../ai/llm';
 import { CLASSES, SPECIES } from '../rules/srd';
 import { requireUser } from './auth';
 
@@ -42,9 +42,9 @@ export async function suggestName(input: {
   const klass = CLASSES[parsed.data.classId];
   if (!species || !klass) return { ok: false, error: 'Données inconnues' };
   try {
-    const response = await anthropic().messages.create({
-      model: MODELS.UTIL,
-      max_tokens: 40,
+    const response = await llm().chat({
+      role: 'builder',
+      maxTokens: 40,
       system: NAME_SYSTEM,
       messages: [
         {
@@ -53,10 +53,7 @@ export async function suggestName(input: {
         },
       ],
     });
-    const text = response.content
-      .filter((b) => b.type === 'text')
-      .map((b) => (b.type === 'text' ? b.text : ''))
-      .join('')
+    const text = response.text
       .trim()
       .replace(/^["«]|["»]$/g, '')
       .replace(/\.$/, '')
@@ -93,17 +90,13 @@ export async function suggestPersona(input: {
   const userPrompt = `Crée une personnalité pour ${parsed.data.name?.trim() || 'un compagnon'}, ${species.name.toLowerCase()} ${klass.name.toLowerCase()}. Renvoie uniquement le texte de la personnalité, rien d'autre.`;
 
   try {
-    const response = await anthropic().messages.create({
-      model: MODELS.UTIL,
-      max_tokens: 200,
+    const response = await llm().chat({
+      role: 'builder',
+      maxTokens: 200,
       system: SYSTEM,
       messages: [{ role: 'user', content: userPrompt }],
     });
-    const text = response.content
-      .filter((b) => b.type === 'text')
-      .map((b) => (b.type === 'text' ? b.text : ''))
-      .join('')
-      .trim();
+    const text = response.text.trim();
     if (!text) return { ok: false, error: 'Réponse vide' };
     return { ok: true, text };
   } catch (err) {

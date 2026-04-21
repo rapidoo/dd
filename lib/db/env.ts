@@ -27,7 +27,30 @@ export const env = {
     return required('SUPABASE_SERVICE_ROLE_KEY');
   },
   get anthropicApiKey() {
-    return required('ANTHROPIC_API_KEY');
+    // Only required when the configured LLM provider actually calls Anthropic.
+    // Allows dev to run in Ollama-only mode without a Claude key.
+    return env.llmProvider === 'anthropic'
+      ? required('ANTHROPIC_API_KEY')
+      : (optional('ANTHROPIC_API_KEY') ?? '');
+  },
+  get llmProvider(): 'anthropic' | 'ollama' {
+    const v = (optional('LLM_PROVIDER') ?? 'anthropic').toLowerCase();
+    return v === 'ollama' ? 'ollama' : 'anthropic';
+  },
+  get ollamaBaseUrl() {
+    return optional('OLLAMA_BASE_URL') ?? 'http://localhost:11434';
+  },
+  get llmModelBuilder() {
+    return optional('LLM_MODEL_BUILDER');
+  },
+  get llmModelGm() {
+    return optional('LLM_MODEL_GM');
+  },
+  get llmModelCompanion() {
+    return optional('LLM_MODEL_COMPANION');
+  },
+  get llmModelUtil() {
+    return optional('LLM_MODEL_UTIL');
   },
   get neo4jUri() {
     return required('NEO4J_URI');

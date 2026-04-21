@@ -1,17 +1,17 @@
-import type Anthropic from '@anthropic-ai/sdk';
+import type { ToolDef } from './llm/types';
 
 /**
- * Tool definitions exposed to the GM agent. All tool execution happens
- * server-side; the LLM only emits structured inputs. Descriptions are
- * kept terse — the main rules live in the GM system prompt.
+ * Tool definitions exposed to the GM agent. Provider-agnostic — adapters
+ * translate `inputSchema` to Anthropic `input_schema` or Ollama OpenAI-style
+ * `parameters`. Rules live in the GM system prompt, descriptions stay terse.
  */
 
-export const GM_TOOLS: Anthropic.Messages.Tool[] = [
+export const GM_TOOLS: ToolDef[] = [
   {
     name: 'request_roll',
     description:
       "Jette un dé côté serveur (attaque, dégâts, save, check, initiative, concentration). À APPELER AVANT de décrire l'issue.",
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         kind: {
@@ -30,7 +30,7 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: 'recall_memory',
     description: 'Recherche une entité déjà enregistrée dans la mémoire de campagne.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: { query: { type: 'string' } },
       required: ['query'],
@@ -39,7 +39,7 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: 'record_entity',
     description: 'Enregistre un PNJ/lieu/faction/objet/quête/événement notable.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         kind: { type: 'string', enum: ['npc', 'location', 'faction', 'item', 'quest', 'event'] },
@@ -52,7 +52,7 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: 'start_combat',
     description: 'Démarre une rencontre. Fournis les PNJ ennemis ; PJ + compagnons ajoutés auto.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         npcs: {
@@ -76,7 +76,7 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
     name: 'apply_damage',
     description:
       'Applique dégâts (positif) ou soins (négatif) à un combattant. Jamais de PV dans le texte.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         combatant_id: { type: 'string', description: 'UUID (section Équipe).' },
@@ -88,7 +88,7 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: 'apply_condition',
     description: 'Pose ou retire une condition.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         combatant_id: { type: 'string' },
@@ -120,18 +120,18 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: 'next_turn',
     description: "Combattant suivant dans l'initiative.",
-    input_schema: { type: 'object', properties: {} },
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'end_combat',
     description: 'Termine la rencontre.',
-    input_schema: { type: 'object', properties: {} },
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'grant_item',
     description:
       "Ajoute/retire un objet (qty positif/négatif). Le concierge post-tour le fait aussi depuis la narration — n'appelle que pour un transfert en plein tour.",
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         character_id: { type: 'string' },
@@ -160,7 +160,7 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: 'adjust_currency',
     description: 'Bourse : positif = gagne, négatif = dépense (clampé ≥ 0).',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         character_id: { type: 'string' },
@@ -176,7 +176,7 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: 'cast_spell',
     description: 'Consomme un emplacement. Pas pour les cantrips.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         character_id: { type: 'string' },
@@ -189,7 +189,7 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: 'trigger_rest',
     description: 'Repos court (1h) ou long (8h).',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         character_id: { type: 'string' },
@@ -201,7 +201,7 @@ export const GM_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: 'prompt_companion',
     description: 'Donne la parole à un compagnon IA.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         character_id: { type: 'string' },

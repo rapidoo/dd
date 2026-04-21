@@ -1,6 +1,6 @@
 import { createSupabaseServiceClient } from '../db/server';
 import type { MessageRow } from '../db/types';
-import { anthropic, MODELS } from './claude';
+import { llm } from './llm';
 
 /**
  * Sliding-window compaction for GM prompt context.
@@ -100,16 +100,12 @@ ${asTranscript}
 Résumé :`;
 
   try {
-    const response = await anthropic().messages.create({
-      model: MODELS.UTIL,
-      max_tokens: 250,
+    const response = await llm().chat({
+      role: 'util',
+      maxTokens: 250,
       messages: [{ role: 'user', content: prompt }],
     });
-    const text = response.content
-      .filter((b) => b.type === 'text')
-      .map((b) => (b.type === 'text' ? b.text : ''))
-      .join('')
-      .trim();
+    const text = response.text.trim();
     if (!text) return null;
     // DB CHECK constraint caps summary at 8192 chars.
     return text.length > 8000 ? `${text.slice(0, 7996)}…` : text;

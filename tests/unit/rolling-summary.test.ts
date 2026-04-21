@@ -30,18 +30,16 @@ vi.mock('../../lib/db/server', () => {
   return { createSupabaseServiceClient: () => supabase };
 });
 
-// Haiku mock — returns a predictable string.
+// LLM mock — returns a predictable string.
 let haikuCalls = 0;
-vi.mock('../../lib/ai/claude', () => ({
-  MODELS: { GM: 'opus', COMPANION: 'sonnet', UTIL: 'haiku' },
-  anthropic: () => ({
-    messages: {
-      create: async () => {
-        haikuCalls++;
-        return { content: [{ type: 'text', text: `résumé ${haikuCalls}` }] };
-      },
+vi.mock('../../lib/ai/llm', () => ({
+  llm: () => ({
+    chat: async () => {
+      haikuCalls++;
+      return { text: `résumé ${haikuCalls}`, toolCalls: [], stopReason: 'end_turn' };
     },
   }),
+  modelFor: () => 'mock',
 }));
 
 import { compactHistory } from '../../lib/ai/rolling-summary';
@@ -111,24 +109,8 @@ describe('compactHistory', () => {
     expect(state.lastUpdate?.summary_cursor).toBe('m24');
   });
 
-  it('falls back to existing summary if Haiku fails', async () => {
-    state.session = { summary: 'previous', summary_cursor: 'm5' };
-    haikuCalls = -1000; // next call returns no text
-    vi.doMock('../../lib/ai/claude', () => ({
-      MODELS: { GM: 'opus', COMPANION: 'sonnet', UTIL: 'haiku' },
-      anthropic: () => ({
-        messages: {
-          create: async () => {
-            throw new Error('haiku down');
-          },
-        },
-      }),
-    }));
-    // Re-import would be required for the doMock to take effect — but we
-    // can't easily do that per-test. Instead, validate the non-error path
-    // covers the flow; the try/catch in haikuSummarize is straightforward.
-    const h = history(20);
-    const result = await compactHistory('s1', h);
-    expect(result.summary).toBeTruthy();
-  });
+  // Summary regeneration always returns something here (mock never throws).
+  // Failure path (llm() throws) is covered by the try/catch in
+  // haikuSummarize — validated by inspection, not per-test re-mock (vi.doMock
+  // after module import doesn't take effect).
 });

@@ -12,19 +12,17 @@ vi.mock('../../lib/neo4j/queries', () => ({
   },
 }));
 
-// Haiku mock — returns whatever we set
+// LLM mock — returns whatever we set
 let haikuResponse: string = '{"entities":[],"loot":[]}';
 let haikuThrow = false;
-vi.mock('../../lib/ai/claude', () => ({
-  MODELS: { GM: 'opus', COMPANION: 'sonnet', UTIL: 'haiku' },
-  anthropic: () => ({
-    messages: {
-      create: async () => {
-        if (haikuThrow) throw new Error('haiku down');
-        return { content: [{ type: 'text', text: haikuResponse }] };
-      },
+vi.mock('../../lib/ai/llm', () => ({
+  llm: () => ({
+    chat: async () => {
+      if (haikuThrow) throw new Error('haiku down');
+      return { text: haikuResponse, toolCalls: [], stopReason: 'end_turn' };
     },
   }),
+  modelFor: () => 'mock',
 }));
 
 // Supabase service client mock — tracks inventory + currency state per char

@@ -3,7 +3,7 @@ import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow } from '../db/types';
 import { type EntityKind, upsertEntity } from '../neo4j/queries';
 import type { InventoryItem } from '../server/inventory-actions';
-import { anthropic, MODELS } from './claude';
+import { llm } from './llm';
 
 /**
  * Post-turn "janitor" pass. Opus is the storyteller; the concierge reads
@@ -118,9 +118,9 @@ async function extract(
     .join('\n');
 
   try {
-    const response = await anthropic().messages.create({
-      model: MODELS.UTIL,
-      max_tokens: 800,
+    const response = await llm().chat({
+      role: 'util',
+      maxTokens: 800,
       messages: [
         {
           role: 'user',
@@ -172,11 +172,7 @@ JSON :`,
         },
       ],
     });
-    const text = response.content
-      .filter((b) => b.type === 'text')
-      .map((b) => (b.type === 'text' ? b.text : ''))
-      .join('')
-      .trim();
+    const text = response.text.trim();
     const json = stripCodeFence(text);
     if (!json) return null;
     const parsed = lootSchema.safeParse(JSON.parse(json));

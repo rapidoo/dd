@@ -1,6 +1,7 @@
 import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow, MessageRow } from '../db/types';
-import { anthropic, MODELS } from './claude';
+import { llm } from './llm';
+import type { ChatMessage } from './llm/types';
 
 const COMPANION_SYSTEM = (
   character: CharacterRow,
@@ -40,24 +41,20 @@ export async function respondAsCompanion(opts: {
       (m) => m.author_kind === 'user' || m.author_kind === 'gm' || m.author_kind === 'character',
     )
     .slice(-6)
-    .map((m) => ({
+    .map<ChatMessage>((m) => ({
       role: m.author_kind === 'user' ? ('user' as const) : ('assistant' as const),
       content: m.content,
     }));
   messages.push({ role: 'user', content: "C'est ton tour de réagir en tant que ce compagnon." });
 
-  const response = await anthropic().messages.create({
-    model: MODELS.COMPANION,
-    max_tokens: 250,
+  const response = await llm().chat({
+    role: 'companion',
     system: COMPANION_SYSTEM(opts.character, opts.hint ?? null),
     messages,
+    maxTokens: 250,
   });
 
-  const text = response.content
-    .filter((b) => b.type === 'text')
-    .map((b) => (b.type === 'text' ? b.text : ''))
-    .join('')
-    .trim();
+  const text = response.text.trim();
   if (!text) return '';
 
   const supabase = createSupabaseServiceClient();
