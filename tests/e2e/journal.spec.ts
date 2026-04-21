@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
+import { createClient } from '@supabase/supabase-js';
 import { ensureTestUser, signInTestUser } from './helpers/auth';
 import { ensureCampaignWithCharacter } from './helpers/campaign';
-import { createClient } from '@supabase/supabase-js';
 
 const USER = { email: 'e2e-player@detd.test', password: 'Tt3st-Str0ng-Pass!' };
 

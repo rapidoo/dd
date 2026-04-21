@@ -17,9 +17,7 @@ test.describe('Authenticated flows', () => {
     await signInTestUser(request, context, baseURL, user);
   });
 
-  test('dashboard greets the logged-in user and can reach campaign creation', async ({
-    page,
-  }) => {
+  test('dashboard greets the logged-in user and can reach campaign creation', async ({ page }) => {
     await page.goto('/dashboard');
     await expect(page.getByRole('heading', { name: /bonjour/i })).toBeVisible();
     await expect(page.getByRole('heading', { name: /tes campagnes/i })).toBeVisible();

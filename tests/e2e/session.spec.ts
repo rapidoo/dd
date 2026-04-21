@@ -52,7 +52,12 @@ test.describe('Session play page', () => {
     await page.goto(`/campaigns/${campaignId}/play`);
 
     // Scene header
-    await expect(page.locator('header').filter({ hasText: /Session/ }).first()).toBeVisible();
+    await expect(
+      page
+        .locator('header')
+        .filter({ hasText: /Session/ })
+        .first(),
+    ).toBeVisible();
 
     // Player panel shows HP
     await expect(page.getByText('Points de vie').first()).toBeVisible();

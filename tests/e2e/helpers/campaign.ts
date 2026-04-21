@@ -10,7 +10,10 @@ const admin = createClient(url, service, { auth: { persistSession: false } });
  * Ensure a campaign + a PC character exist for the given owner. Returns the
  * campaign id + character id so tests can navigate directly to session pages.
  */
-export async function ensureCampaignWithCharacter(ownerId: string, prefix = 'e2e'): Promise<{
+export async function ensureCampaignWithCharacter(
+  ownerId: string,
+  prefix = 'e2e',
+): Promise<{
   campaignId: string;
   characterId: string;
 }> {

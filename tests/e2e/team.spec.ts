@@ -16,9 +16,9 @@ test.describe('Team page', () => {
 
     const name = `Dorn ${Date.now()}`;
     await page.getByPlaceholder('Dorn Ferrecoeur').fill(name);
-    await page.getByPlaceholder(/Nain bourru/).fill(
-      'Nain bourru mais loyal. Prend les coups en premier.',
-    );
+    await page
+      .getByPlaceholder(/Nain bourru/)
+      .fill('Nain bourru mais loyal. Prend les coups en premier.');
     await page.getByRole('button', { name: /recruter/i }).click();
 
     // After form submission, the page re-renders with the new companion card
