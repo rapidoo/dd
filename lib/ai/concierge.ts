@@ -121,6 +121,7 @@ async function extract(
     const response = await llm().chat({
       role: 'util',
       maxTokens: 800,
+      jsonMode: true,
       messages: [
         {
           role: 'user',
@@ -173,12 +174,42 @@ JSON :`,
       ],
     });
     const text = response.text.trim();
-    const json = stripCodeFence(text);
-    if (!json) return null;
-    const parsed = lootSchema.safeParse(JSON.parse(json));
-    return parsed.success ? parsed.data : null;
-  } catch {
+    const json = extractJson(text);
+    if (!json) {
+      logConciergeFailure('no_json', { textPreview: text.slice(0, 200) });
+      return null;
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(json);
+    } catch (err) {
+      logConciergeFailure('json_parse_error', {
+        message: err instanceof Error ? err.message : String(err),
+        jsonPreview: json.slice(0, 200),
+      });
+      return null;
+    }
+    const parsed = lootSchema.safeParse(raw);
+    if (!parsed.success) {
+      logConciergeFailure('schema_invalid', {
+        issues: parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}: ${i.message}`),
+      });
+      return null;
+    }
+    return parsed.data;
+  } catch (err) {
+    logConciergeFailure('llm_error', {
+      message: err instanceof Error ? err.message : String(err),
+    });
     return null;
+  }
+}
+
+function logConciergeFailure(code: string, meta: Record<string, unknown>): void {
+  // Visible en dev pour diagnostiquer gemma3:4b / prompt issues, silencieux
+  // en production pour ne pas polluer Vercel logs.
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn(`[concierge] ${code}`, meta);
   }
 }
 
@@ -271,9 +302,44 @@ function hasNonZeroCurrency(c: {
   return [c.cp, c.sp, c.ep, c.gp, c.pp].some((v) => typeof v === 'number' && v !== 0);
 }
 
-function stripCodeFence(text: string): string {
+/**
+ * Pull the first balanced JSON object out of a mixed response. Handles:
+ *   - Raw JSON (Ollama with `format:'json'` path)
+ *   - Markdown code fence wrappers
+ *   - Prose preamble/postamble ("Here is the JSON: {…} hope this helps")
+ * Returns "" if no plausible object is found.
+ */
+export function extractJson(text: string): string {
+  if (!text) return '';
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  return fenced?.[1]?.trim() ?? text;
+  const candidate = fenced?.[1]?.trim() ?? text.trim();
+  const start = candidate.indexOf('{');
+  if (start === -1) return '';
+  let depth = 0;
+  let inString = false;
+  let isEscaped = false;
+  for (let i = start; i < candidate.length; i++) {
+    const ch = candidate[i];
+    if (isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      isEscaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return candidate.slice(start, i + 1);
+    }
+  }
+  return '';
 }
 
 function makeEntityId(kind: string, name: string): string {

@@ -190,6 +190,39 @@ describe('createOllamaProvider — fetch wiring', () => {
     });
   });
 
+  it('passes format:"json" when jsonMode is set', async () => {
+    global.fetch = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      capture.body = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ message: { role: 'assistant', content: '{}' } }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+    const provider = createOllamaProvider(() => 'gemma3:4b');
+    await provider.chat({
+      role: 'util',
+      messages: [{ role: 'user', content: 'json please' }],
+      maxTokens: 50,
+      jsonMode: true,
+    });
+    expect(capture.body?.format).toBe('json');
+  });
+
+  it('omits format when jsonMode is not set', async () => {
+    global.fetch = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      capture.body = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ message: { role: 'assistant', content: 'hi' } }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+    const provider = createOllamaProvider(() => 'gemma3:4b');
+    await provider.chat({
+      role: 'util',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 50,
+    });
+    expect(capture.body?.format).toBeUndefined();
+  });
+
   it('maps HTTP 404 with "model not found" to LlmError("model_missing")', async () => {
     global.fetch = vi.fn(
       async () =>

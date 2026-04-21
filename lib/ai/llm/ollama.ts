@@ -35,6 +35,9 @@ export function createOllamaProvider(modelFor: (req: ChatRequest) => string): Ll
               })),
             }
           : {}),
+        // Constrained decoding when the caller needs clean JSON back — Gemma
+        // 3 otherwise likes to wrap output in prose or markdown fences.
+        ...(req.jsonMode ? { format: 'json' as const } : {}),
       };
 
       let response: Response;

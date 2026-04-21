@@ -39,6 +39,12 @@ export interface ChatRequest {
   maxTokens: number;
   /** Optional temperature passthrough; providers pick a sensible default. */
   temperature?: number;
+  /**
+   * Request valid-JSON output. Ollama enforces via `format: 'json'` (constrained
+   * decoding); Anthropic has no native equivalent so callers should still
+   * instruct the model in the prompt — but the flag is honored where possible.
+   */
+  jsonMode?: boolean;
 }
 
 export interface ChatResponse {
