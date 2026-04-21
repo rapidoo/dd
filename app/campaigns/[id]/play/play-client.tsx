@@ -69,6 +69,7 @@ export function PlayClient({
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [partyOpen, setPartyOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll reacts to count changes, not contents
@@ -215,7 +216,7 @@ export function PlayClient({
     <div className="relative flex h-screen">
       <SessionSidebar campaignId={campaignId} current="session" />
       <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="flex items-center justify-between border-b border-line bg-gradient-to-br from-[rgba(212,166,76,0.1)] to-transparent px-8 py-4">
+        <header className="flex items-center justify-between border-b border-line bg-gradient-to-br from-[rgba(212,166,76,0.1)] to-transparent px-4 py-4 md:px-8">
           <div className="flex items-center gap-4">
             <div
               className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-candle-glow to-gold text-lg text-bg-deep"
@@ -230,13 +231,24 @@ export function PlayClient({
               <h1 className="font-narr text-xl text-gold-bright">{campaignName}</h1>
             </div>
           </div>
+          {(player || companions.length > 0) && (
+            <button
+              type="button"
+              onClick={() => setPartyOpen(true)}
+              aria-label="Voir l'équipe"
+              className="flex h-10 items-center gap-2 rounded-md border border-line px-3 font-display text-[11px] uppercase tracking-[0.2em] text-gold hover:border-gold lg:hidden"
+            >
+              <span aria-hidden>⚔</span>
+              Équipe
+            </button>
+          )}
         </header>
 
         <div className="flex flex-1 overflow-hidden">
           <div className="flex flex-1 flex-col overflow-hidden">
             <div
               ref={scrollRef}
-              className="flex-1 overflow-auto px-10 pt-6 pb-4"
+              className="flex-1 overflow-auto px-4 pt-6 pb-4 md:px-10"
               style={{
                 background:
                   'radial-gradient(ellipse at 50% 100%, rgba(240,176,80,0.05), transparent 60%)',
@@ -278,7 +290,7 @@ export function PlayClient({
               {typing && <TypingIndicator who={typing} />}
             </div>
 
-            <div className="flex items-end gap-2 border-t border-line px-8 py-4">
+            <div className="flex items-end gap-2 border-t border-line px-4 py-4 md:px-8">
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -293,51 +305,91 @@ export function PlayClient({
                 placeholder="Décris ce que tu fais…"
                 className="flex-1 resize-none rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold disabled:opacity-60"
               />
-              <BtnPrimary icon="▸" onClick={send} disabled={isPending || typing !== null}>
-                Envoyer
+              <BtnPrimary
+                icon="▸"
+                onClick={send}
+                disabled={isPending || typing !== null}
+                aria-label="Envoyer"
+              >
+                <span className="hidden md:inline">Envoyer</span>
               </BtnPrimary>
             </div>
           </div>
 
           {(player || companions.length > 0) && (
-            <PlayerPanel
-              campaignId={campaignId}
-              player={player}
-              companions={companions}
-              onPromptCompanion={(characterId) => {
-                const comp = companions.find((c) => c.id === characterId);
-                if (!comp) return;
-                setTyping(comp.name);
-                promptCompanion({ sessionId, characterId }).then(async (res) => {
-                  setTyping(null);
-                  const content = res.ok ? res.content : undefined;
-                  if (!content) return;
-                  const now = new Date().toLocaleTimeString('fr-FR', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  });
-                  setMessages((m) => [
-                    ...m,
-                    {
-                      kind: 'msg',
-                      id: `c-${Date.now()}-${characterId}`,
-                      authorKind: 'companion',
-                      authorName: res.characterName ?? comp.name,
-                      content,
-                      time: now,
-                      color: '#c47a3a',
-                    },
-                  ]);
-                  await streamGmFollowUp(now);
-                  void refreshParty();
-                });
-              }}
-            />
+            <>
+              <div className="hidden lg:flex">
+                <PlayerPanel
+                  campaignId={campaignId}
+                  player={player}
+                  companions={companions}
+                  onPromptCompanion={handlePromptCompanion}
+                />
+              </div>
+              {partyOpen && (
+                <div className="fixed inset-0 z-40 flex lg:hidden" role="dialog" aria-modal="true">
+                  <button
+                    type="button"
+                    aria-label="Fermer le panneau équipe"
+                    className="flex-1 bg-black/70"
+                    onClick={() => setPartyOpen(false)}
+                  />
+                  <div className="relative flex w-[min(85vw,340px)] flex-col border-l border-line bg-bg-deep shadow-2xl">
+                    <button
+                      type="button"
+                      onClick={() => setPartyOpen(false)}
+                      aria-label="Fermer"
+                      className="absolute top-3 right-3 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-line text-text-mute hover:border-gold hover:text-gold"
+                    >
+                      ✕
+                    </button>
+                    <PlayerPanel
+                      campaignId={campaignId}
+                      player={player}
+                      companions={companions}
+                      onPromptCompanion={(characterId) => {
+                        setPartyOpen(false);
+                        handlePromptCompanion(characterId);
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
     </div>
   );
+
+  function handlePromptCompanion(characterId: string) {
+    const comp = companions.find((c) => c.id === characterId);
+    if (!comp) return;
+    setTyping(comp.name);
+    promptCompanion({ sessionId, characterId }).then(async (res) => {
+      setTyping(null);
+      const content = res.ok ? res.content : undefined;
+      if (!content) return;
+      const now = new Date().toLocaleTimeString('fr-FR', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      setMessages((m) => [
+        ...m,
+        {
+          kind: 'msg',
+          id: `c-${Date.now()}-${characterId}`,
+          authorKind: 'companion',
+          authorName: res.characterName ?? comp.name,
+          content,
+          time: now,
+          color: '#c47a3a',
+        },
+      ]);
+      await streamGmFollowUp(now);
+      void refreshParty();
+    });
+  }
 }
 
 function appendToMsg(messages: DisplayMessage[], id: string, text: string): DisplayMessage[] {

@@ -75,7 +75,8 @@ test.describe('Session play page', () => {
     });
 
     // Inline dice card rendered with total 17 + kind label
-    await expect(page.getByText('17', { exact: true }).first()).toBeVisible({ timeout: 8000 });
-    await expect(page.getByText(/TEST/).first()).toBeVisible();
+    const diceCard = page.locator('article').filter({ hasText: /Test/i }).first();
+    await expect(diceCard).toBeVisible({ timeout: 8000 });
+    await expect(diceCard.getByText('17', { exact: true }).last()).toBeVisible();
   });
 });

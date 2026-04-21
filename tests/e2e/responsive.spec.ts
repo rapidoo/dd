@@ -109,6 +109,19 @@ test.describe('Responsive layouts — mobile viewports', () => {
         path: `test-results/responsive/play-${vp.name}.png`,
         fullPage: true,
       });
+
+      // Party drawer — hidden by default, opens on tap, closes on backdrop tap.
+      const drawerTrigger = page.getByRole('button', { name: /voir l'équipe/i });
+      await expect(drawerTrigger).toBeVisible();
+      await drawerTrigger.click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByText(/autour du feu/i)).toBeVisible();
+      await dialog
+        .getByRole('button', { name: /fermer/i })
+        .first()
+        .click();
+      await expect(dialog).toBeHidden();
     });
   }
 });
