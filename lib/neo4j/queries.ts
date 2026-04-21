@@ -138,7 +138,9 @@ export async function upsertFactNode(fact: FactUpsert): Promise<void> {
     await session.run(
       `MERGE (c:Campaign { id: $campaign_id })
          ON CREATE SET c.created_at = datetime()
-       MATCH (e:Entity { id: $entity_id }), (s:Session { id: $session_id })
+       WITH c
+       MATCH (e:Entity { id: $entity_id })
+       MATCH (s:Session { id: $session_id })
        MERGE (f:Fact { id: $id })
          ON CREATE SET f.created_at = datetime()
        SET f.campaign_id = $campaign_id,

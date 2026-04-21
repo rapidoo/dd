@@ -30,7 +30,7 @@ import { GM_TOOLS, type RecordEntityInput, type RequestRollInput } from './tools
 
 const GM_SYSTEM_PROMPT = `Tu es "Le Conteur", MJ d'une partie de D&D 5e SRD. Style dark fantasy cozy, français, 3-6 phrases par tour, pas de markdown, pas d'emojis, italique <em>…</em> pour les paroles de PNJ. Théâtre de l'esprit (pas de grille).
 
-Jets : TOUJOURS via l'outil request_roll avant de décrire l'issue. Jamais "Fais un jet", "Lance un dé", "Jette les dés". Chaîne attack → damage (en cas de hit/crit, enchaîne request_roll kind=damage avec les dés de l'arme+mod ; sur crit, double les dés). Nat 20 = critique amplifié, nat 1 = complication.
+Jets : TOUJOURS via l'outil request_roll avant de décrire l'issue. Jamais "Fais un jet", "Lance un dé", "Jette les dés". Chaîne attack → damage : sur hit/crit, enchaîne IMMÉDIATEMENT request_roll(kind="damage", dice="<arme+mod>", target_combatant_id="<UUID de la cible>"). Le serveur APPLIQUE automatiquement les dégâts — tu ne dois JAMAIS appeler apply_damage après un damage roll qui a un target_combatant_id. Sur crit, double les dés (ex "2d8+3" au lieu de "1d8+3"). Nat 20 = critique, nat 1 = complication.
 
 PV & états : apply_damage(combatant_id, amount) pour dégâts/soins (négatif=soin). apply_condition(combatant_id, condition, add). Ne JAMAIS écrire les PV dans le texte — l'UI les affiche depuis la DB. start_combat seulement pour rencontres avec initiative.
 
@@ -227,6 +227,10 @@ const rollSchema = z.object({
   dc: z.number().int().min(1).max(40).optional(),
   target_ac: z.number().int().min(1).max(40).optional(),
   advantage: z.enum(ADVANTAGE).optional(),
+  // When kind='damage' and target_combatant_id is provided, the server
+  // applies the damage total automatically — the GM doesn't need a
+  // separate apply_damage call. Positive total = damage, negative = heal.
+  target_combatant_id: z.string().min(1).max(128).optional(),
 });
 
 const recallSchema = z.object({ query: z.string().min(1).max(200) });
@@ -670,21 +674,53 @@ async function executeRoll(
     ...(input.dc !== undefined ? { dc: input.dc } : {}),
     ...(input.target_ac !== undefined ? { targetAC: input.target_ac } : {}),
   };
+  const events: GmEvent[] = [
+    {
+      type: 'dice_request',
+      rollId: data?.id ?? 'local',
+      roll: record,
+      label: input.label,
+    },
+  ];
+
+  // Auto-apply damage to a named target. Tenant-guarded so a hallucinated
+  // UUID can't touch another campaign. Works for NPC combatants too
+  // (prefix `npc-` is allowed by combatantBelongsToSession).
+  let applied: { target: string; newHp?: number } | null = null;
+  if (input.kind === 'damage' && input.target_combatant_id && roll.total !== 0) {
+    const targetId = input.target_combatant_id;
+    if (await combatantBelongsToSession(sessionId, targetId)) {
+      try {
+        const res = await applyDamageToCharacter(targetId, roll.total);
+        const newHp = (res.result as { current_hp?: number } | null)?.current_hp;
+        applied = { target: targetId, newHp };
+        for (const ev of res.events) events.push(ev);
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug(
+            `[gm.damage] auto-applied ${roll.total} to ${targetId}${
+              newHp !== undefined ? ` → ${newHp} HP` : ''
+            }`,
+          );
+        }
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[gm.damage] auto-apply failed', err);
+        }
+      }
+    } else if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[gm.damage] target ${targetId} not in session — not applied`);
+    }
+  }
+
   return {
     result: {
       total: roll.total,
       dice: roll.dice,
       outcome: roll.outcome,
       label: input.label,
+      ...(applied ? { applied } : {}),
     },
-    events: [
-      {
-        type: 'dice_request',
-        rollId: data?.id ?? 'local',
-        roll: record,
-        label: input.label,
-      },
-    ],
+    events,
   };
 }
 

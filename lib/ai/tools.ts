@@ -10,7 +10,7 @@ export const GM_TOOLS: ToolDef[] = [
   {
     name: 'request_roll',
     description:
-      "Jette un dé côté serveur (attaque, dégâts, save, check, initiative, concentration). À APPELER AVANT de décrire l'issue.",
+      "Jette un dé côté serveur (attaque, dégâts, save, check, initiative, concentration). À APPELER AVANT de décrire l'issue. Quand kind='damage' ET target_combatant_id est fourni, le serveur applique automatiquement les dégâts au combattant — pas besoin d'appeler apply_damage séparément.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -23,6 +23,11 @@ export const GM_TOOLS: ToolDef[] = [
         dc: { type: 'number' },
         target_ac: { type: 'number' },
         advantage: { type: 'string', enum: ['normal', 'advantage', 'disadvantage'] },
+        target_combatant_id: {
+          type: 'string',
+          description:
+            "OBLIGATOIRE quand kind='damage' : UUID du combattant qui encaisse (PJ/compagnon de la section Équipe, ou npc-* en combat). Le serveur applique automatiquement les dégâts — ne rappelle PAS apply_damage après.",
+        },
       },
       required: ['kind', 'label', 'dice'],
     },
@@ -221,6 +226,7 @@ export interface RequestRollInput {
   dc?: number;
   target_ac?: number;
   advantage?: 'normal' | 'advantage' | 'disadvantage';
+  target_combatant_id?: string;
 }
 
 export interface RecallMemoryInput {
