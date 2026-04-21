@@ -123,9 +123,17 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     knownEntities,
   );
 
-  let safety = 0;
-  while (safety < 6) {
-    safety++;
+  // Two independent safety counters: reprompt retries (roll-delegation
+  // safeguard) shouldn't steal budget from real tool iterations. When either
+  // cap is hit we soft-close the turn with a short narrative pause rather
+  // than surfacing an error to the player.
+  const MAX_TOOL_ITERATIONS = 12;
+  const MAX_REPROMPT_RETRIES = 2;
+  let toolIterations = 0;
+  let repromptRetries = 0;
+
+  while (toolIterations < MAX_TOOL_ITERATIONS) {
+    toolIterations++;
     let response: Awaited<ReturnType<ReturnType<typeof llm>['chat']>>;
     try {
       response = await llm().chat({
@@ -140,17 +148,20 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
       return;
     }
 
-    // Safeguard: if the GM delegated a roll to the player without calling
-    // request_roll, swallow the text and re-prompt. Inventory/currency is
-    // handled separately by the post-turn concierge pass — no guard needed.
     const fullText = response.text;
     const calledRequestRoll = response.toolCalls.some((c) => c.name === 'request_roll');
 
+    // Roll-delegation safeguard — only retry a limited number of times so
+    // a stubborn model can't exhaust the tool budget.
     if (hasRollDelegation(fullText) && !calledRequestRoll) {
-      messages.push({
-        role: 'assistant',
-        content: '(tour rejeté : jet délégué au joueur)',
-      });
+      if (repromptRetries >= MAX_REPROMPT_RETRIES) {
+        if (fullText) yield { type: 'text_delta', delta: fullText };
+        yield { type: 'done' };
+        return;
+      }
+      repromptRetries++;
+      toolIterations--; // reprompt shouldn't eat the tool budget
+      messages.push({ role: 'assistant', content: '(tour rejeté : jet délégué au joueur)' });
       messages.push({
         role: 'user',
         content:
@@ -175,7 +186,17 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     }
     messages.push({ role: 'tool', results });
   }
-  yield { type: 'error', message: 'Too many tool iterations' };
+
+  // Soft-close: the model got stuck in a tool loop. Give the player a
+  // natural pause rather than an error banner — they can prompt again.
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[gm] tool iteration cap hit — soft-closing turn');
+  }
+  yield {
+    type: 'text_delta',
+    delta: '\n\n<em>Le Conteur reprend son souffle. Que fais-tu ?</em>',
+  };
+  yield { type: 'done' };
 }
 
 // --- Zod schemas for every tool input --------------------------------------
