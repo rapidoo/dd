@@ -4,7 +4,14 @@ import { useEffect, useState } from 'react';
 
 export type DiceFaces = 4 | 6 | 8 | 10 | 12 | 20;
 
-export type RollKind = 'attack' | 'damage' | 'save' | 'check' | 'initiative' | 'concentration';
+export type RollKind =
+  | 'attack'
+  | 'damage'
+  | 'heal'
+  | 'save'
+  | 'check'
+  | 'initiative'
+  | 'concentration';
 
 export interface DiceOverlayState {
   dice: Array<{ faces: DiceFaces; value: number }>;

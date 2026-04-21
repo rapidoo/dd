@@ -30,7 +30,11 @@ import { GM_TOOLS, type RecordEntityInput, type RequestRollInput } from './tools
 
 const GM_SYSTEM_PROMPT = `Tu es "Le Conteur", MJ d'une partie de D&D 5e SRD. Style dark fantasy cozy, français, 3-6 phrases par tour, pas de markdown, pas d'emojis, italique <em>…</em> pour les paroles de PNJ. Théâtre de l'esprit (pas de grille).
 
-Jets : TOUJOURS via l'outil request_roll avant de décrire l'issue. Jamais "Fais un jet", "Lance un dé", "Jette les dés". Chaîne attack → damage : sur hit/crit, enchaîne IMMÉDIATEMENT request_roll(kind="damage", dice="<arme+mod>", target_combatant_id="<UUID de la cible>"). Le serveur APPLIQUE automatiquement les dégâts — tu ne dois JAMAIS appeler apply_damage après un damage roll qui a un target_combatant_id. Sur crit, double les dés (ex "2d8+3" au lieu de "1d8+3"). Nat 20 = critique, nat 1 = complication.
+Jets : TOUJOURS via l'outil request_roll avant de décrire l'issue. Jamais "Fais un jet", "Lance un dé", "Jette les dés".
+
+Chaîne attack → damage : sur hit/crit, enchaîne IMMÉDIATEMENT request_roll(kind="damage", dice="<arme+mod>", target_combatant_id="<UUID cible>"). Le serveur APPLIQUE automatiquement les dégâts — NE RAPPELLE PAS apply_damage après. Sur crit, double les dés ("2d8+3" au lieu de "1d8+3"). Nat 20 = critique, nat 1 = complication.
+
+Soins : pour un sort/objet de soin, utilise kind="heal" (PAS "damage") avec target_combatant_id. Ex : Soins niv 1 → request_roll(kind="heal", dice="1d8+3", target_combatant_id="<PJ>"). Le serveur remonte les PV automatiquement. Utiliser kind="damage" avec un target_combatant_id sur un allié baisserait ses PV — c'est ce que tu veux SEULEMENT si c'est un coup reçu.
 
 PV & états : apply_damage(combatant_id, amount) pour dégâts/soins (négatif=soin). apply_condition(combatant_id, condition, add). Ne JAMAIS écrire les PV dans le texte — l'UI les affiche depuis la DB. start_combat seulement pour rencontres avec initiative.
 
@@ -215,7 +219,15 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
 // The LLM produces these inputs. We validate before trusting them, so a
 // hallucinated or prompt-injected payload can't reach the DB.
 
-const ROLL_KINDS = ['attack', 'damage', 'save', 'check', 'initiative', 'concentration'] as const;
+const ROLL_KINDS = [
+  'attack',
+  'damage',
+  'heal',
+  'save',
+  'check',
+  'initiative',
+  'concentration',
+] as const;
 const ADVANTAGE = ['normal', 'advantage', 'disadvantage'] as const;
 const ENTITY_KINDS = ['npc', 'location', 'faction', 'item', 'quest', 'event'] as const;
 const ITEM_TYPES = ['weapon', 'armor', 'tool', 'consumable', 'treasure', 'misc'] as const;
@@ -686,29 +698,39 @@ async function executeRoll(
   // Auto-apply damage to a named target. Tenant-guarded so a hallucinated
   // UUID can't touch another campaign. Works for NPC combatants too
   // (prefix `npc-` is allowed by combatantBelongsToSession).
-  let applied: { target: string; newHp?: number } | null = null;
-  if (input.kind === 'damage' && input.target_combatant_id && roll.total !== 0) {
-    const targetId = input.target_combatant_id;
+  // Auto-apply damage / heal when the GM targeted a combatant. The sign is
+  // derived from the kind :
+  //   kind='damage' → positive (HP down)
+  //   kind='heal'   → negative (HP up, clamped at max via applyDamageToCharacter)
+  let applied: { target: string; newHp?: number; mode?: 'damage' | 'heal' } | null = null;
+  const applyable =
+    (input.kind === 'damage' || input.kind === 'heal') &&
+    input.target_combatant_id &&
+    roll.total !== 0;
+  if (applyable) {
+    const targetId = input.target_combatant_id as string;
     if (await combatantBelongsToSession(sessionId, targetId)) {
       try {
-        const res = await applyDamageToCharacter(targetId, roll.total);
+        const signed = input.kind === 'heal' ? -roll.total : roll.total;
+        const res = await applyDamageToCharacter(targetId, signed);
         const newHp = (res.result as { current_hp?: number } | null)?.current_hp;
-        applied = { target: targetId, newHp };
+        applied = { target: targetId, newHp, mode: input.kind as 'damage' | 'heal' };
         for (const ev of res.events) events.push(ev);
         if (process.env.NODE_ENV !== 'production') {
+          const verb = input.kind === 'heal' ? 'healed' : 'damaged';
           console.debug(
-            `[gm.damage] auto-applied ${roll.total} to ${targetId}${
+            `[gm.${input.kind}] auto-${verb} ${roll.total} on ${targetId}${
               newHp !== undefined ? ` → ${newHp} HP` : ''
             }`,
           );
         }
       } catch (err) {
         if (process.env.NODE_ENV !== 'production') {
-          console.warn('[gm.damage] auto-apply failed', err);
+          console.warn(`[gm.${input.kind}] auto-apply failed`, err);
         }
       }
     } else if (process.env.NODE_ENV !== 'production') {
-      console.warn(`[gm.damage] target ${targetId} not in session — not applied`);
+      console.warn(`[gm.${input.kind}] target ${targetId} not in session — not applied`);
     }
   }
 
@@ -729,7 +751,12 @@ function resolveRoll(
   advantage: 'normal' | 'advantage' | 'disadvantage',
 ): { dice: number[]; modifier: number; total: number; outcome: string | null } {
   const parsed = parseDiceExpression(input.dice);
-  if (parsed.faces === 20 && parsed.count === 1 && input.kind !== 'damage') {
+  if (
+    parsed.faces === 20 &&
+    parsed.count === 1 &&
+    input.kind !== 'damage' &&
+    input.kind !== 'heal'
+  ) {
     const d20 = rollD20(parsed.modifier, advantage);
     const nat = d20.roll;
     const outcome =
@@ -759,7 +786,7 @@ function resolveRoll(
 
 function mapRollKind(
   kind: RequestRollInput['kind'],
-): 'attack' | 'damage' | 'save' | 'check' | 'initiative' | 'concentration' {
+): 'attack' | 'damage' | 'heal' | 'save' | 'check' | 'initiative' | 'concentration' {
   return kind;
 }
 

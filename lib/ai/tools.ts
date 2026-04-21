@@ -10,13 +10,13 @@ export const GM_TOOLS: ToolDef[] = [
   {
     name: 'request_roll',
     description:
-      "Jette un dé côté serveur (attaque, dégâts, save, check, initiative, concentration). À APPELER AVANT de décrire l'issue. Quand kind='damage' ET target_combatant_id est fourni, le serveur applique automatiquement les dégâts au combattant — pas besoin d'appeler apply_damage séparément.",
+      "Jette un dé côté serveur (attaque, dégâts, soins, save, check, initiative, concentration). À APPELER AVANT de décrire l'issue. Quand kind='damage' ou kind='heal' ET target_combatant_id est fourni, le serveur applique automatiquement le résultat au combattant (damage = PV -total, heal = PV +total) — pas besoin d'appeler apply_damage séparément.",
     inputSchema: {
       type: 'object',
       properties: {
         kind: {
           type: 'string',
-          enum: ['attack', 'damage', 'save', 'check', 'initiative', 'concentration'],
+          enum: ['attack', 'damage', 'heal', 'save', 'check', 'initiative', 'concentration'],
         },
         label: { type: 'string', description: 'Ex: "Perception", "Sauvegarde SAG".' },
         dice: { type: 'string', description: 'Ex: "1d20+5", "2d6+3".' },
@@ -220,7 +220,7 @@ export const GM_TOOLS: ToolDef[] = [
 export type GmToolName = 'request_roll' | 'recall_memory' | 'record_entity';
 
 export interface RequestRollInput {
-  kind: 'attack' | 'damage' | 'save' | 'check' | 'initiative' | 'concentration';
+  kind: 'attack' | 'damage' | 'heal' | 'save' | 'check' | 'initiative' | 'concentration';
   label: string;
   dice: string;
   dc?: number;

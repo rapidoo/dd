@@ -10,6 +10,7 @@ export type AuthorKind = 'user' | 'gm' | 'character' | 'system';
 export type RollKind =
   | 'attack'
   | 'damage'
+  | 'heal'
   | 'save'
   | 'check'
   | 'initiative'

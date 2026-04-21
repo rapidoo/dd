@@ -3,7 +3,14 @@
 import { useEffect, useState } from 'react';
 
 export type DiceFaces = 4 | 6 | 8 | 10 | 12 | 20;
-export type RollKind = 'attack' | 'damage' | 'save' | 'check' | 'initiative' | 'concentration';
+export type RollKind =
+  | 'attack'
+  | 'damage'
+  | 'heal'
+  | 'save'
+  | 'check'
+  | 'initiative'
+  | 'concentration';
 
 export interface DiceCardProps {
   label: string;
@@ -25,6 +32,7 @@ export interface DiceCardProps {
 const KIND_LABEL: Record<RollKind, string> = {
   attack: "Jet d'attaque",
   damage: 'Dégâts',
+  heal: 'Soins',
   save: 'Sauvegarde',
   check: 'Test',
   initiative: 'Initiative',
@@ -34,6 +42,7 @@ const KIND_LABEL: Record<RollKind, string> = {
 const KIND_GLYPH: Record<RollKind, string> = {
   attack: '⚔',
   damage: '✦',
+  heal: '✚',
   save: '◈',
   check: '⚶',
   initiative: '⚡',
