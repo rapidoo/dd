@@ -8,10 +8,56 @@ Plateforme web permettant de jouer à Donjons & Dragons 5e en solo avec un MJ IA
 - **Front** : Next.js 16 (App Router) · React 19 · TypeScript strict · Tailwind v4
 - **Back** : Next.js Server Actions · Route Handlers (SSE)
 - **Data** : Supabase Postgres (RLS) · Neo4j AuraDB (mémoire graphe)
-- **LLM** : Anthropic SDK — Opus (MJ), Sonnet (compagnons), Haiku (utilitaires)
+- **LLM** : abstraction multi-provider (`lib/ai/llm/`) — **Anthropic** (stable) ou **Ollama / Gemma 4** (expérimental, dev-only)
 - **Validation** : Zod · **Tests** : Vitest · **Lint** : Biome
 
 Voir `spec.md` pour l'architecture complète et `dnd5e_rules.md` pour les règles.
+
+## Providers LLM
+
+Le switch `LLM_PROVIDER` (env) choisit le backend :
+
+### Anthropic — **mode stable, utilisé en prod**
+| Rôle | Modèle | Usage |
+|---|---|---|
+| BUILDER | `claude-haiku-4-5` | Création de PJ/compagnons (noms, personnalités) |
+| **GM** | `claude-opus-4-7` | Narration MJ (seul rôle sur Opus — richesse stylistique visible au joueur) |
+| COMPANION | `claude-haiku-4-5` | Voix des compagnons IA |
+| UTIL | `claude-haiku-4-5` | Concierge (entités + butin) + résumé roulant |
+
+### Ollama (Gemma 4) — **⚠️ en cours de stabilisation, non production-ready**
+
+Mode local gratuit utilisant uniquement la famille **gemma4**. Utile pour tester
+sans consommer la facture Anthropic, mais la qualité narrative, la fiabilité
+des tool-calls et la tolérance aux formats JSON restent en cours d'évaluation.
+**Ne pas utiliser en prod Vercel** — l'URL localhost n'est pas joignable depuis
+le déploiement.
+
+| Rôle | Modèle | Taille |
+|---|---|---|
+| BUILDER | `gemma4:31b` | 20 GB |
+| GM | `gemma4:26b` | 18 GB |
+| COMPANION | `gemma4:26b` | 18 GB (même modèle que GM, évite un rechargement en RAM) |
+| UTIL | `gemma4:e2b` | 7.2 GB |
+
+Setup local :
+```bash
+ollama serve
+ollama pull gemma4:31b gemma4:26b gemma4:e2b
+# .env.local :
+LLM_PROVIDER=ollama
+# (ANTHROPIC_API_KEY devient optionnelle dans ce mode)
+pnpm dev
+```
+
+Limites connues du mode Ollama :
+- Les tool-calls dépendent du support du modèle (erreur typée
+  `model_no_tool_support` si un modèle gemma4 ne le gère pas encore).
+- Le concierge utilise `format: 'json'` pour forcer un JSON propre ; les
+  échecs éventuels sont loggés côté serveur (`[concierge] no_json` /
+  `schema_invalid` / …) — surveillez la console `pnpm dev`.
+- Les modèles tournent en non-streaming (contrairement au streaming SSE
+  d'Anthropic) ; la narration apparaît en un bloc à la fin du tour.
 
 ## Démarrer en local
 
@@ -91,6 +137,7 @@ tests/                  vitest unit + (à venir) Playwright e2e
 
 ## Prochaines étapes (v0.2+)
 
+- Stabiliser le mode Ollama (fiabilité tool-calls, JSON concierge, streaming)
 - Onboarding guidé complet (campagne → pitch → PJ → première session)
 - Génération d'images (scènes / portraits) — Replicate / fal.ai
 - Sous-vues Sorts et Sac (actuellement agrégées dans la fiche)
