@@ -5,7 +5,7 @@ import { createSupabaseServerClient } from '../../../../lib/db/server';
 import type { CharacterRow } from '../../../../lib/db/types';
 import { getAbilityModifier } from '../../../../lib/rules/abilities';
 import { proficiencyBonus } from '../../../../lib/rules/proficiency';
-import { CLASSES, SPECIES } from '../../../../lib/rules/srd';
+import { getClassesForUniverse, getSpeciesForUniverse, CLASSES, SPECIES } from '../../../../lib/rules/srd';
 import { requireUser } from '../../../../lib/server/auth';
 import { getCampaign } from '../../../../lib/server/campaigns';
 import type { InventoryItem } from '../../../../lib/server/inventory-actions';
@@ -53,8 +53,11 @@ export default async function SheetPage({
     characters[0];
   if (!character) notFound();
 
-  const species = SPECIES[character.species]?.name ?? character.species;
-  const className = CLASSES[character.class]?.name ?? character.class;
+  const universe = campaign.universe ?? 'dnd5e';
+  const speciesData = getSpeciesForUniverse(universe);
+  const classesData = getClassesForUniverse(universe);
+  const species = speciesData[character.species]?.name ?? character.species;
+  const className = classesData[character.class]?.name ?? character.class;
   const prof = proficiencyBonus(character.level);
   const abilities: Array<[string, number]> = [
     ['FOR', character.str],

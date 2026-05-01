@@ -1,5 +1,6 @@
 import { env } from '../../db/env';
 import { createAnthropicProvider } from './anthropic';
+import { createMistralProvider } from './mistral';
 import { createOllamaProvider } from './ollama';
 import type { ChatRequest, LlmProvider, LlmRole } from './types';
 
@@ -28,12 +29,24 @@ const ANTHROPIC_DEFAULTS: Record<LlmRole, string> = {
 //   builder   → 31b (20GB) pour la création de campagne/persona
 //   gm        → 26b (18GB) pour la narration en session
 //   companion → 26b (18GB) pour garder la personnalité cohérente en contexte long
-//   util      → e2b (7.2GB) pour concierge/summary (throughput)
+//   util      → e4b pour concierge/summary (throughput)
 const OLLAMA_DEFAULTS: Record<LlmRole, string> = {
   builder: 'gemma4:31b',
   gm: 'gemma4:26b',
   companion: 'gemma4:26b',
-  util: 'gemma4:e2b',
+  util: 'gemma4:e4b',
+};
+
+// Mistral defaults:
+//   builder   → mistral-large-2407 pour la création (créativité)
+//   gm        → mistral-large-2407 pour la narration MJ
+//   companion → mistral-small-2402 pour les réponses courtes
+//   util      → mistral-small-2402 pour concierge/summary
+const MISTRAL_DEFAULTS: Record<LlmRole, string> = {
+  builder: 'mistral-large-2407',
+  gm: 'mistral-large-2407',
+  companion: 'mistral-small-2402',
+  util: 'mistral-small-2402',
 };
 
 /** Resolve the model name for a role — env override falls back to provider default. */
@@ -48,7 +61,9 @@ export function modelFor(role: LlmRole): string {
           ? env.llmModelCompanion
           : env.llmModelUtil;
   if (override) return override;
-  return (provider === 'ollama' ? OLLAMA_DEFAULTS : ANTHROPIC_DEFAULTS)[role];
+  if (provider === 'ollama') return OLLAMA_DEFAULTS[role];
+  if (provider === 'mistral') return MISTRAL_DEFAULTS[role];
+  return ANTHROPIC_DEFAULTS[role];
 }
 
 let cached: LlmProvider | null = null;
@@ -57,10 +72,20 @@ let cached: LlmProvider | null = null;
 export function llm(): LlmProvider {
   if (cached) return cached;
   const resolveModel = (req: ChatRequest): string => modelFor(req.role);
+  const provider = env.llmProvider;
   cached =
-    env.llmProvider === 'ollama'
+    provider === 'ollama'
       ? createOllamaProvider(resolveModel)
-      : createAnthropicProvider(resolveModel);
+      : provider === 'mistral'
+        ? createMistralProvider(resolveModel)
+        : createAnthropicProvider(resolveModel);
+  console.info(
+    `[llm] provider=${provider}` +
+      (provider === 'ollama' ? ` url=${env.ollamaBaseUrl}` : '') +
+      (provider === 'mistral' ? ` url=${env.mistralBaseUrl}` : '') +
+      ` builder=${modelFor('builder')} gm=${modelFor('gm')}` +
+      ` companion=${modelFor('companion')} util=${modelFor('util')}`,
+  );
   return cached;
 }
 

@@ -268,3 +268,177 @@ export const BACKGROUNDS = [
 ] as const;
 
 export type BackgroundId = (typeof BACKGROUNDS)[number];
+
+// ============ Witcher Universe Adaptations ============
+
+// Species available in The Witcher universe
+export const WITCHER_SPECIES: Record<string, SpeciesData> = {
+  human: {
+    id: 'human',
+    name: 'Humain',
+    baseSpeed: 9,
+    abilityBonuses: { str: 1, dex: 1, con: 1, int: 1, wis: 1, cha: 1 },
+  },
+  elf: {
+    id: 'elf',
+    name: 'Elfe',
+    baseSpeed: 9,
+    abilityBonuses: { dex: 2, int: 1 },
+  },
+  dwarf: {
+    id: 'dwarf',
+    name: 'Nain',
+    baseSpeed: 7.5,
+    abilityBonuses: { con: 2, str: 1 },
+  },
+  halfElf: {
+    id: 'halfElf',
+    name: 'Demi-Elfe',
+    baseSpeed: 9,
+    abilityBonuses: { cha: 2, dex: 1 },
+  },
+  halfling: {
+    id: 'halfling',
+    name: 'Halfling',
+    baseSpeed: 7.5,
+    abilityBonuses: { dex: 2, cha: 1 },
+  },
+};
+
+// Classes available in The Witcher universe (adapted roles)
+export const WITCHER_CLASSES: Record<string, ClassData> = {
+  witcher: {
+    id: 'witcher',
+    name: 'Sorceleur',
+    hitDie: 'd10',
+    primaryAbility: ['dex', 'str'],
+    casterType: 'half', // Sorceleurs ont une magie limitée (signes)
+    spellAbility: 'int',
+    savingThrowProficiencies: ['dex', 'con'],
+    skillChoices: 3,
+    skillList: [
+      'athletics',
+      'perception',
+      'stealth',
+      'survival',
+      'intimidation',
+      'arcana',
+      'nature',
+      'insight',
+    ],
+  },
+  mage: {
+    id: 'mage',
+    name: 'Mage',
+    hitDie: 'd6',
+    primaryAbility: ['int', 'wis'],
+    casterType: 'full',
+    spellAbility: 'int',
+    savingThrowProficiencies: ['int', 'wis'],
+    skillChoices: 3,
+    skillList: [
+      'arcana',
+      'history',
+      'insight',
+      'investigation',
+      'religion',
+      'persuasion',
+      'deception',
+    ],
+  },
+  thief: {
+    id: 'thief',
+    name: 'Voleur',
+    hitDie: 'd8',
+    primaryAbility: ['dex'],
+    casterType: 'none',
+    savingThrowProficiencies: ['dex', 'int'],
+    skillChoices: 4,
+    skillList: [
+      'acrobatics',
+      'stealth',
+      'sleightOfHand',
+      'deception',
+      'perception',
+      'insight',
+      'investigation',
+      'persuasion',
+      'athletics',
+    ],
+  },
+  scout: {
+    id: 'scout',
+    name: 'Éclaireur',
+    hitDie: 'd10',
+    primaryAbility: ['dex', 'wis'],
+    casterType: 'none',
+    savingThrowProficiencies: ['dex', 'wis'],
+    skillChoices: 4,
+    skillList: [
+      'athletics',
+      'perception',
+      'stealth',
+      'survival',
+      'nature',
+      'insight',
+      'animalHandling',
+      'investigation',
+    ],
+  },
+  warrior: {
+    id: 'warrior',
+    name: 'Guerrier',
+    hitDie: 'd12',
+    primaryAbility: ['str', 'con'],
+    casterType: 'none',
+    savingThrowProficiencies: ['str', 'con'],
+    skillChoices: 2,
+    skillList: [
+      'athletics',
+      'intimidation',
+      'perception',
+      'survival',
+      'animalHandling',
+    ],
+  },
+  alchemist: {
+    id: 'alchemist',
+    name: 'Alchimiste',
+    hitDie: 'd8',
+    primaryAbility: ['int', 'wis'],
+    casterType: 'none',
+    savingThrowProficiencies: ['int', 'con'],
+    skillChoices: 3,
+    skillList: [
+      'arcana',
+      'nature',
+      'medicine',
+      'investigation',
+      'insight',
+      'survival',
+      'perception',
+    ],
+  },
+};
+
+// Helper function to get species for a given universe
+export function getSpeciesForUniverse(universe: 'dnd5e' | 'witcher'): Record<string, SpeciesData> {
+  return universe === 'witcher' ? WITCHER_SPECIES : SPECIES;
+}
+
+// Helper function to get classes for a given universe
+export function getClassesForUniverse(universe: 'dnd5e' | 'witcher'): Record<string, ClassData> {
+  return universe === 'witcher' ? WITCHER_CLASSES : CLASSES;
+}
+
+// Get species as array of {id, name} for select options
+export function getSpeciesOptions(universe: 'dnd5e' | 'witcher'): Array<{ id: string; name: string }> {
+  const species = getSpeciesForUniverse(universe);
+  return Object.entries(species).map(([id, data]) => ({ id, name: data.name }));
+}
+
+// Get classes as array of {id, name} for select options
+export function getClassOptions(universe: 'dnd5e' | 'witcher'): Array<{ id: string; name: string }> {
+  const classes = getClassesForUniverse(universe);
+  return Object.entries(classes).map(([id, data]) => ({ id, name: data.name }));
+}

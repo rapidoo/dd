@@ -18,6 +18,7 @@ export type RollKind =
   | 'concentration'
   | 'hit_die';
 export type SettingMode = 'homebrew' | 'module' | 'generated';
+export type Universe = 'dnd5e' | 'witcher';
 export type CampaignStatus = 'active' | 'paused' | 'archived';
 export type EntityKind = 'npc' | 'location' | 'faction' | 'item' | 'quest' | 'event';
 export type AssetKind = 'scene' | 'portrait' | 'map' | 'item';
@@ -40,6 +41,7 @@ export type CampaignRow = {
   setting_pitch: string | null;
   module_id: string | null;
   world_summary: string | null;
+  universe: Universe | null;
   current_session_id: Uuid | null;
   status: CampaignStatus;
   created_at: Iso;

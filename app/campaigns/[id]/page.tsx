@@ -5,7 +5,7 @@ import { Stat } from '../../../components/ui/stat';
 import { createSupabaseServerClient } from '../../../lib/db/server';
 import type { CharacterRow, SessionRow } from '../../../lib/db/types';
 import { getModuleTemplate } from '../../../lib/modules/templates';
-import { CLASSES, SPECIES } from '../../../lib/rules/srd';
+import { getClassesForUniverse, getSpeciesForUniverse, CLASSES, SPECIES } from '../../../lib/rules/srd';
 import { requireUser } from '../../../lib/server/auth';
 import { getCampaign } from '../../../lib/server/campaigns';
 
@@ -93,11 +93,13 @@ export default async function CampaignPage({ params }: { params: Promise<Params>
         title="✧ Tes personnages"
         empty="Aucun joueur pour l'instant."
         list={players}
+        universe={campaign.universe ?? 'dnd5e'}
       />
       <CharactersSection
         title="◉ Compagnons"
         empty="Pas encore de compagnon autour du feu."
         list={companions}
+        universe={campaign.universe ?? 'dnd5e'}
       />
 
       <section>
@@ -137,11 +139,16 @@ function CharactersSection({
   title,
   empty,
   list,
+  universe,
 }: {
   title: string;
   empty: string;
   list: CharacterRow[];
+  universe: 'dnd5e' | 'witcher';
 }) {
+  const classes = getClassesForUniverse(universe);
+  const species = getSpeciesForUniverse(universe);
+  
   return (
     <section>
       <h2 className="mb-3 font-display text-sm uppercase tracking-[0.3em] text-gold">{title}</h2>
@@ -152,7 +159,7 @@ function CharactersSection({
           {list.map((c) => (
             <article key={c.id} className="border border-line bg-card p-4">
               <p className="font-display text-[10px] uppercase tracking-[0.25em] text-gold">
-                {SPECIES[c.species]?.name ?? c.species} · {CLASSES[c.class]?.name ?? c.class}{' '}
+                {species[c.species]?.name ?? c.species} · {classes[c.class]?.name ?? c.class}{' '}
                 {c.level}
               </p>
               <h3 className="mt-1 font-narr text-2xl text-gold-bright">{c.name}</h3>

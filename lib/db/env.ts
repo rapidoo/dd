@@ -33,12 +33,22 @@ export const env = {
       ? required('ANTHROPIC_API_KEY')
       : (optional('ANTHROPIC_API_KEY') ?? '');
   },
-  get llmProvider(): 'anthropic' | 'ollama' {
+  get llmProvider(): 'anthropic' | 'ollama' | 'mistral' {
     const v = (optional('LLM_PROVIDER') ?? 'anthropic').toLowerCase();
-    return v === 'ollama' ? 'ollama' : 'anthropic';
+    if (v === 'ollama') return 'ollama';
+    if (v === 'mistral') return 'mistral';
+    return 'anthropic';
   },
   get ollamaBaseUrl() {
     return optional('OLLAMA_BASE_URL') ?? 'http://localhost:11434';
+  },
+  get mistralApiKey() {
+    return env.llmProvider === 'mistral'
+      ? required('MISTRAL_API_KEY')
+      : (optional('MISTRAL_API_KEY') ?? '');
+  },
+  get mistralBaseUrl() {
+    return optional('MISTRAL_BASE_URL') ?? 'https://api.mistral.ai';
   },
   get llmModelBuilder() {
     return optional('LLM_MODEL_BUILDER');

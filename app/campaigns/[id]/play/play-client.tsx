@@ -210,7 +210,11 @@ export function PlayClient({
     } finally {
       setTyping(null);
       setMessages((m) =>
-        m.map((x) => (x.kind === 'msg' && x.id === gmId ? { ...x, streaming: false } : x)),
+        m.flatMap((x) => {
+          if (x.kind !== 'msg' || x.id !== gmId) return [x];
+          if (!x.content.trim()) return [];
+          return [{ ...x, streaming: false }];
+        }),
       );
       void refreshParty();
     }

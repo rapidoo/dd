@@ -370,3 +370,10 @@ comment on column public.sessions.summary_cursor is
 -- Une migration future la supprimera une fois la stabilité confirmée.
 comment on table public.entities is
   'DEPRECATED — entity memory moved to Neo4j (see lib/neo4j/queries.ts). Kept for rollback; drop in a future migration.';
+-- Add universe column to campaigns table
+-- Universe determines the game system: dnd5e or witcher
+
+alter table public.campaigns
+add column universe text not null default 'dnd5e' check (universe in ('dnd5e', 'witcher'));
+
+create index campaigns_universe_idx on public.campaigns(universe);

@@ -2,8 +2,8 @@
 
 import { useActionState, useState } from 'react';
 import { BtnPrimary } from '../../../components/ui/button';
-import type { CampaignRow } from '../../../lib/db/types';
-import { MODULE_TEMPLATES } from '../../../lib/modules/templates';
+import type { CampaignRow, Universe } from '../../../lib/db/types';
+import { MODULE_TEMPLATES, getModulesByUniverse } from '../../../lib/modules/templates';
 import { createCampaign, type ServerResult } from '../../../lib/server/campaigns';
 
 const MODES: Array<{
@@ -41,6 +41,7 @@ export function NewCampaignForm() {
   );
   const [settingMode, setSettingMode] = useState<'homebrew' | 'module' | 'generated'>('homebrew');
   const [moduleId, setModuleId] = useState<string | null>(null);
+  const [universe, setUniverse] = useState<Universe>('dnd5e');
 
   const fieldError = (key: string) => {
     if (!state || state.ok) return null;
@@ -88,14 +89,50 @@ export function NewCampaignForm() {
         </div>
       </fieldset>
 
+      <fieldset className="flex flex-col gap-3">
+        <legend className="text-xs uppercase tracking-[0.2em] text-text-mute">Univers</legend>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label
+            className={`flex cursor-pointer flex-col gap-1 border border-line bg-card p-4 has-[:checked]:border-gold has-[:checked]:bg-[rgba(212,166,76,0.08)]`}
+          >
+            <input
+              type="radio"
+              name="universe"
+              value="dnd5e"
+              checked={universe === 'dnd5e'}
+              onChange={() => setUniverse('dnd5e')}
+              className="sr-only"
+            />
+            <span className="font-display text-xl text-gold-bright">⚔</span>
+            <span className="font-display text-sm text-text">Donjons & Dragons 5e</span>
+            <span className="text-xs text-text-mute">Règles D&D 5e standard : classes, races, magie, alignement.</span>
+          </label>
+          <label
+            className={`flex cursor-pointer flex-col gap-1 border border-line bg-card p-4 has-[:checked]:border-gold has-[:checked]:bg-[rgba(212,166,76,0.08)]`}
+          >
+            <input
+              type="radio"
+              name="universe"
+              value="witcher"
+              checked={universe === 'witcher'}
+              onChange={() => setUniverse('witcher')}
+              className="sr-only"
+            />
+            <span className="font-display text-xl text-gold-bright">🏹</span>
+            <span className="font-display text-sm text-text">The Witcher</span>
+            <span className="text-xs text-text-mute">Univers sombre et réaliste : sorceleurs, monstres, magie des Signes, alchimie.</span>
+          </label>
+        </div>
+      </fieldset>
+
       {settingMode === 'module' && (
         <section className="flex flex-col gap-3">
           <p className="text-xs uppercase tracking-[0.2em] text-text-mute">
-            Choisis un module — {MODULE_TEMPLATES.length} disponibles
+            Choisis un module — {getModulesByUniverse(universe).length} disponibles pour {universe === 'dnd5e' ? 'D&D 5e' : 'The Witcher'}
           </p>
           <input type="hidden" name="moduleId" value={moduleId ?? ''} />
           <div className="grid gap-3 md:grid-cols-2">
-            {MODULE_TEMPLATES.map((t) => {
+            {getModulesByUniverse(universe).map((t) => {
               const selected = moduleId === t.id;
               return (
                 <button

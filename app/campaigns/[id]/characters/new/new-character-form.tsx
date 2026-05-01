@@ -3,9 +3,9 @@
 import { useActionState, useMemo, useState } from 'react';
 import { BtnPrimary } from '../../../../../components/ui/button';
 import { Stat } from '../../../../../components/ui/stat';
-import type { CharacterRow } from '../../../../../lib/db/types';
+import type { CharacterRow, Universe } from '../../../../../lib/db/types';
 import { deriveCharacter } from '../../../../../lib/rules/derivations';
-import { CLASSES, SPECIES } from '../../../../../lib/rules/srd';
+import { getClassOptions, getClassesForUniverse, getSpeciesForUniverse, getSpeciesOptions } from '../../../../../lib/rules/srd';
 import type { AbilityScores } from '../../../../../lib/rules/types';
 import type { ServerResult } from '../../../../../lib/server/campaigns';
 import { createCharacter } from '../../../../../lib/server/characters';
@@ -40,13 +40,33 @@ const SKILL_LABELS: Record<string, string> = {
   survival: 'Survie',
 };
 
-export function NewCharacterForm({ campaignId }: { campaignId: string }) {
+export function NewCharacterForm({ campaignId, universe: campaignUniverse }: { campaignId: string; universe: Universe }) {
   const [state, formAction] = useActionState<ServerResult<CharacterRow> | null, FormData>(
     createCharacter,
     null,
   );
-  const [classId, setClassId] = useState('fighter');
-  const [speciesId, setSpeciesId] = useState('human');
+  // Allow override universe for testing before DB migration is applied
+  const [universe, setUniverse] = useState<Universe>(campaignUniverse);
+  const classes = getClassesForUniverse(universe);
+  const species = getSpeciesForUniverse(universe);
+  const classOptions = getClassOptions(universe);
+  const speciesOptions = getSpeciesOptions(universe);
+  
+  // Default to first available class and species for the universe
+  const [classId, setClassId] = useState(classOptions[0]?.id ?? 'fighter');
+  const [speciesId, setSpeciesId] = useState(speciesOptions[0]?.id ?? 'human');
+  
+  // Reset selections when universe changes
+  useMemo(() => {
+    // When universe changes, reset to first available options
+    if (classOptions.length > 0 && classId && !classOptions.some(c => c.id === classId)) {
+      setClassId(classOptions[0]!.id);
+    }
+    if (speciesOptions.length > 0 && speciesId && !speciesOptions.some(s => s.id === speciesId)) {
+      setSpeciesId(speciesOptions[0]!.id);
+    }
+    setSkills([]);
+  }, [universe, classOptions, speciesOptions, classId, speciesId]);
   const [abilities, setAbilities] = useState<AbilityScores>({
     str: 15,
     dex: 14,
@@ -57,7 +77,7 @@ export function NewCharacterForm({ campaignId }: { campaignId: string }) {
   });
   const [skills, setSkills] = useState<string[]>([]);
 
-  const classData = CLASSES[classId];
+  const classData = classes[classId];
   const availableSkills = classData?.skillList ?? [];
   const skillLimit = classData?.skillChoices ?? 2;
 
@@ -98,6 +118,21 @@ export function NewCharacterForm({ campaignId }: { campaignId: string }) {
         <input key={s} type="hidden" name="skillProficiencies" value={s} />
       ))}
 
+      {/* Universe selector for Witcher/D&D - allows testing before DB migration */}
+      {process.env.NODE_ENV !== 'production' && (
+        <label className="flex flex-col gap-1 text-xs uppercase tracking-[0.2em] text-text-mute">
+          Univers (dev)
+          <select
+            value={universe}
+            onChange={(e) => setUniverse(e.target.value as Universe)}
+            className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold"
+          >
+            <option value="dnd5e">Donjons & Dragons 5e</option>
+            <option value="witcher">The Witcher</option>
+          </select>
+        </label>
+      )}
+
       <section className="grid gap-4 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-xs uppercase tracking-[0.2em] text-text-mute">
           Nom
@@ -132,7 +167,7 @@ export function NewCharacterForm({ campaignId }: { campaignId: string }) {
             onChange={(e) => setSpeciesId(e.target.value)}
             className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold"
           >
-            {Object.values(SPECIES).map((s) => (
+            {speciesOptions.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
               </option>
@@ -150,9 +185,9 @@ export function NewCharacterForm({ campaignId }: { campaignId: string }) {
             }}
             className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold"
           >
-            {Object.values(CLASSES).map((c) => (
+            {classOptions.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.name} (DV {c.hitDie})
+                {c.name}
               </option>
             ))}
           </select>

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requireUser } from '../../../../../lib/server/auth';
 import { getCampaign } from '../../../../../lib/server/campaigns';
+import type { Universe } from '../../../../../lib/db/types';
 import { NewCharacterForm } from './new-character-form';
 
 export default async function NewCharacterPage({ params }: { params: Promise<{ id: string }> }) {
@@ -28,7 +29,7 @@ export default async function NewCharacterPage({ params }: { params: Promise<{ i
         </p>
       </header>
 
-      <NewCharacterForm campaignId={id} />
+      <NewCharacterForm campaignId={id} universe={campaign.universe ?? 'dnd5e'} />
     </main>
   );
 }

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createSupabaseServerClient } from '../../../../lib/db/server';
 import type { CharacterRow } from '../../../../lib/db/types';
+import { getClassesForUniverse, getSpeciesForUniverse } from '../../../../lib/rules/srd';
 import { requireUser } from '../../../../lib/server/auth';
 import { getCampaign } from '../../../../lib/server/campaigns';
 import { TeamForm } from './team-form';
@@ -20,6 +21,10 @@ export default async function TeamPage({ params }: { params: Promise<{ id: strin
     .eq('is_ai', true)
     .order('created_at', { ascending: true });
   const companions = (data ?? []) as CharacterRow[];
+  
+  const universe = campaign.universe ?? 'dnd5e';
+  const speciesData = getSpeciesForUniverse(universe);
+  const classesData = getClassesForUniverse(universe);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-6 py-12 text-text">
@@ -47,7 +52,7 @@ export default async function TeamPage({ params }: { params: Promise<{ id: strin
         {companions.map((c) => (
           <article key={c.id} className="border border-line bg-card p-5">
             <p className="font-display text-xs uppercase tracking-[0.25em] text-gold">
-              {c.species} · {c.class} {c.level}
+              {speciesData[c.species]?.name ?? c.species} · {classesData[c.class]?.name ?? c.class} {c.level}
             </p>
             <h2 className="mt-1 font-narr text-2xl text-gold-bright">{c.name}</h2>
             {typeof c.persona === 'object' && c.persona && 'notes' in c.persona ? (
@@ -66,7 +71,7 @@ export default async function TeamPage({ params }: { params: Promise<{ id: strin
         <h2 className="mb-4 font-display text-sm uppercase tracking-[0.3em] text-gold">
           ✦ Recruter un compagnon
         </h2>
-        <TeamForm campaignId={id} />
+        <TeamForm campaignId={id} universe={campaign.universe ?? 'dnd5e'} />
       </section>
     </main>
   );

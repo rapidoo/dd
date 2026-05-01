@@ -44,6 +44,8 @@ Butin : narre librement qui ramasse/donne/dépense quoi — un concierge post-to
 
 Ne résume pas l'action du joueur — enchaîne sur les conséquences. Conclus souvent par "Que fais-tu ?".`;
 
+import type { Universe } from '../db/types';
+
 export interface GmTurnInput {
   sessionId: string;
   userMessage: string;
@@ -52,6 +54,8 @@ export interface GmTurnInput {
   companions: CharacterRow[];
   /** Campaign pitch / world summary — injected in system prompt. */
   worldSummary?: string | null;
+  /** Universe for the campaign (dnd5e or witcher) — affects GM style and rules. */
+  universe?: Universe | null;
 }
 
 export type GmEvent =
@@ -123,7 +127,12 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     return { role: 'user' as const, content };
   });
   if (input.userMessage && input.userMessage.trim().length > 0) {
-    messages.push({ role: 'user', content: input.userMessage });
+    messages.push({ role: 'user', content: clipText(input.userMessage, MAX_TAIL_CHARS) });
+  }
+
+  // Safety: ensure at least one user message exists for the GM to respond to
+  if (messages.length === 0) {
+    messages.push({ role: 'user', content: 'Que fais-tu ?' });
   }
 
   const systemPrompt = buildSystemPrompt(
@@ -132,6 +141,7 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     input.worldSummary,
     rollingSummary,
     knownEntities,
+    input.universe ?? 'dnd5e',
   );
 
   if (process.env.NODE_ENV !== 'production') {
@@ -164,8 +174,9 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
       return;
     }
 
-    const fullText = response.text;
+    const fullText = response.text.trim();
     const calledRequestRoll = response.toolCalls.some((c) => c.name === 'request_roll');
+    const calledPromptCompanion = response.toolCalls.some((c) => c.name === 'prompt_companion');
 
     // Roll-delegation safeguard — only retry a limited number of times so
     // a stubborn model can't exhaust the tool budget.
@@ -182,6 +193,25 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
         role: 'user',
         content:
           'Tu viens d\'écrire une formule qui délègue un jet au joueur (ex: "Fais un jet", "Lance un dé", "Jette les dés"). C\'est interdit. Annule cette narration et appelle request_roll MAINTENANT, puis reprends la suite en fonction du résultat.',
+      });
+      continue;
+    }
+
+    // Companion-without-narration safeguard. If the GM hands the mic to a
+    // companion without narrating anything, the chat shows an empty
+    // Conteur bubble next to the companion's reply. Reprompt to force a
+    // scene description first.
+    if (calledPromptCompanion && !fullText && repromptRetries < MAX_REPROMPT_RETRIES) {
+      repromptRetries++;
+      toolIterations--;
+      messages.push({
+        role: 'assistant',
+        content: '(tour rejeté : compagnon invoqué sans narration)',
+      });
+      messages.push({
+        role: 'user',
+        content:
+          "Tu as appelé prompt_companion sans rien narrer. Décris d'abord la scène en 2-4 phrases (ce que voit/sent/entend le joueur), PUIS appelle prompt_companion si pertinent.",
       });
       continue;
     }
@@ -560,7 +590,10 @@ function buildSystemPrompt(
   worldSummary?: string | null,
   rollingSummary?: string | null,
   knownEntities?: Array<{ name: string; kind: string; short_description: string | null }>,
+  universe?: Universe,
 ): string {
+  // Default to dnd5e if universe is not provided
+  const effectiveUniverse = universe ?? 'dnd5e';
   const partyLines: string[] = [];
   if (player) {
     partyLines.push(
@@ -590,24 +623,45 @@ function buildSystemPrompt(
     );
   }
 
-  // Cap worldSummary server-side at ~3000 chars — Postgres allows 16 KB but
-  // shipping that every turn is wasteful. Rolling summary stays as-is (Haiku
-  // already targets 80-120 words = ~600 chars).
+  // Cap worldSummary and rollingSummary server-side at ~3000 chars — Postgres allows 16 KB but
+  // shipping that every turn is wasteful. Haiku targets 80-120 words = ~600 chars, but
+  // cap at 3000 to prevent token budget blowup.
   const worldBlock = worldSummary
     ? `\nCampagne en cours :\n${clipText(worldSummary.trim(), 3000)}\n`
     : '';
   const rollingBlock = rollingSummary
-    ? `\nJusqu'ici dans cette veillée (résumé, les faits sont canon) :\n${rollingSummary.trim()}\n`
+    ? `\nJusqu'ici dans cette veillée (résumé, les faits sont canon) :\n${clipText(rollingSummary.trim(), 3000)}\n`
     : '';
   const memoryBlock = buildMemoryBlock(knownEntities ?? []);
 
-  return `${GM_SYSTEM_PROMPT}
+  // Build universe-specific system prompt
+  const basePrompt = effectiveUniverse === 'witcher' ? GM_SYSTEM_PROMPT_WITCHER : GM_SYSTEM_PROMPT;
+
+  return `${basePrompt}
 ${worldBlock}${rollingBlock}${memoryBlock}
 Équipe actuelle :
 ${partyLines.join('\n')}
 
 Quand un compagnon est présent, pense à lui laisser la parole régulièrement via prompt_companion — décris une scène, puis passe-lui le micro (indique character_id et éventuellement un hint).`;
 }
+
+const GM_SYSTEM_PROMPT_WITCHER = `Tu es "Le Conteur", MJ d'une partie dans l'univers de The Witcher. Style sombre et réaliste, français, 3-6 phrases par tour, pas de markdown, pas d'emojis, italique <em>…</em> pour les paroles de PNJ. Théâtre de l'esprit.
+
+Règles Witcher : utilise les termes adaptés — sorceleurs (guerriers-mages), sources (magie du chaos), signes (sorts), potions, alchimie, contrats de chasse. Les races : humains, elfes, nains, demi-elfes, halflings. Pas de classes D&D traditionnelles : les personnages sont des sorceleurs, mages, voleurs, éclaireurs, guerriers, etc.
+
+Jets : TOUJOURS via l'outil request_roll avant de décrire l'issue. Jamais "Fais un jet", "Lance un dé", "Jette les dés".
+
+Chaîne attack → damage : sur hit/crit, enchaîne IMMÉDIATEMENT request_roll(kind="damage", dice="<arme+mod>", target_combatant_id="<UUID cible>"). Le serveur APPLIQUE automatiquement les dégâts. Sur crit, double les dés ("2d6+3" au lieu de "1d6+3").
+
+Soins : pour un sort/objet de soin, utilise kind="heal" avec target_combatant_id. Ex : Soins → request_roll(kind="heal", dice="1d8+3", target_combatant_id="<PJ>").
+
+PV & états : apply_damage(combatant_id, amount) pour dégâts/soins (négatif=soin). apply_condition(combatant_id, condition, add).
+
+Magie : les "signes" sont la magie des sorceleurs. Pas de sorts traditionnels D&D. cast_spell n'est PAS utilisé — utilise des actions descriptives.
+
+Butin : narre librement qui ramasse/donne/dépense quoi — un concierge post-tour met à jour bourses et inventaires.
+
+Ne résume pas l'action du joueur — enchaîne sur les conséquences. Conclus souvent par "Que fais-tu ?".`;
 
 async function executeCompanion(
   input: { character_id: string; hint?: string },

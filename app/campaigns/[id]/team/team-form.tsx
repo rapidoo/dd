@@ -3,19 +3,25 @@
 import { useActionState, useState, useTransition } from 'react';
 import { BtnPrimary } from '../../../../components/ui/button';
 import type { CharacterRow } from '../../../../lib/db/types';
-import { CLASSES, SPECIES } from '../../../../lib/rules/srd';
+import type { Universe } from '../../../../lib/db/types';
+import { getClassOptions, getSpeciesForUniverse, getSpeciesOptions, getClassesForUniverse } from '../../../../lib/rules/srd';
 import type { ServerResult } from '../../../../lib/server/campaigns';
 import { createCompanion } from '../../../../lib/server/companions';
 import { suggestName, suggestPersona } from '../../../../lib/server/persona-suggest';
 
-export function TeamForm({ campaignId }: { campaignId: string }) {
+export function TeamForm({ campaignId, universe }: { campaignId: string; universe: Universe }) {
   const [state, formAction] = useActionState<ServerResult<CharacterRow> | null, FormData>(
     createCompanion,
     null,
   );
+  const classes = getClassesForUniverse(universe);
+  const species = getSpeciesForUniverse(universe);
+  const classOptions = getClassOptions(universe);
+  const speciesOptions = getSpeciesOptions(universe);
+  
   const [name, setName] = useState('');
-  const [speciesId, setSpeciesId] = useState('dwarf');
-  const [classId, setClassId] = useState('fighter');
+  const [speciesId, setSpeciesId] = useState(speciesOptions[0]?.id ?? 'dwarf');
+  const [classId, setClassId] = useState(classOptions[0]?.id ?? 'fighter');
   const [persona, setPersona] = useState('');
   const [suggestPending, startSuggest] = useTransition();
   const [suggestError, setSuggestError] = useState<string | null>(null);
@@ -77,7 +83,7 @@ export function TeamForm({ campaignId }: { campaignId: string }) {
           onChange={(e) => setSpeciesId(e.target.value)}
           className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold"
         >
-          {Object.values(SPECIES).map((s) => (
+          {speciesOptions.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
             </option>
@@ -92,7 +98,7 @@ export function TeamForm({ campaignId }: { campaignId: string }) {
           onChange={(e) => setClassId(e.target.value)}
           className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold"
         >
-          {Object.values(CLASSES).map((c) => (
+          {classOptions.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
             </option>

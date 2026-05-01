@@ -2,7 +2,7 @@ import { runConcierge } from '../../../../../lib/ai/concierge';
 import { isDebugCommand, runDebugCommand } from '../../../../../lib/ai/debug-mode';
 import { runGmTurn } from '../../../../../lib/ai/gm-agent';
 import { createSupabaseServerClient } from '../../../../../lib/db/server';
-import type { CharacterRow, MessageRow } from '../../../../../lib/db/types';
+import type { CharacterRow, MessageRow, Universe } from '../../../../../lib/db/types';
 import { rateLimit } from '../../../../../lib/server/rate-limit';
 
 export const runtime = 'nodejs';
@@ -16,7 +16,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const url = new URL(req.url);
   const userMessage = url.searchParams.get('message') ?? '';
   const trigger = url.searchParams.get('trigger') ?? '';
-  if (!userMessage && trigger !== 'companion_spoke') {
+  if (!userMessage.trim() && trigger !== 'companion_spoke') {
     return new Response('missing message', { status: 400 });
   }
 
@@ -64,9 +64,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     .order('created_at', { ascending: true });
   const { data: campaign } = await supabase
     .from('campaigns')
-    .select('world_summary')
+    .select('world_summary, universe')
     .eq('id', session.campaign_id)
-    .maybeSingle<{ world_summary: string | null }>();
+    .maybeSingle<{ world_summary: string | null; universe: Universe | null }>();
   const all = (characters ?? []) as CharacterRow[];
   const player = all.find((c) => !c.is_ai) ?? null;
   const companions = all.filter((c) => c.is_ai);
@@ -100,6 +100,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
               player,
               companions,
               worldSummary: campaign?.world_summary ?? null,
+              universe: (campaign?.universe as Universe | null | undefined) ?? 'dnd5e',
             });
 
         for await (const ev of iterator) {
