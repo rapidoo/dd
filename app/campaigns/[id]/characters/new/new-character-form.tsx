@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useMemo, useState } from 'react';
+import { useActionState, useEffect, useMemo, useState } from 'react';
 
 import { BtnPrimary } from '../../../../../components/ui/button';
 import { Stat } from '../../../../../components/ui/stat';
@@ -73,58 +73,6 @@ export function NewCharacterForm({
   // Default to first available class and species for the universe
   const [classId, setClassId] = useState(classOptions[0]?.id ?? 'fighter');
   const [speciesId, setSpeciesId] = useState(speciesOptions[0]?.id ?? 'human');
-
-  // Reset selections when universe changes
-  useMemo(() => {
-    // When universe changes, reset to first available options
-    if (classOptions.length > 0 && classId && !classOptions.some((c) => c.id === classId)) {
-      setClassId(classOptions[0]?.id ?? '');
-    }
-    if (speciesOptions.length > 0 && speciesId && !speciesOptions.some((s) => s.id === speciesId)) {
-      setSpeciesId(speciesOptions[0]?.id ?? '');
-    }
-    setSkills([]);
-    // Clear template selection if universe is not witcher
-    if (universe !== 'witcher') {
-      setSelectedTemplate(null);
-    }
-  }, [universe, classOptions, speciesOptions, classId, speciesId]);
-
-  const classData = classes[classId];
-  const availableSkills = classData?.skillList ?? [];
-  const skillLimit = classData?.skillChoices ?? 2;
-
-  // Apply template when selected
-  useMemo(() => {
-    if (selectedTemplate) {
-      // Find matching species and class IDs
-      const templateSpecies = speciesOptions.find(
-        (s) => s.name.toLowerCase() === selectedTemplate.species.toLowerCase(),
-      );
-      const templateClass = classOptions.find(
-        (c) => c.name.toLowerCase() === selectedTemplate.class.toLowerCase(),
-      );
-
-      if (templateSpecies) setSpeciesId(templateSpecies.id);
-      if (templateClass) setClassId(templateClass.id);
-
-      setAbilities({
-        str: selectedTemplate.abilities.str,
-        dex: selectedTemplate.abilities.dex,
-        con: selectedTemplate.abilities.con,
-        int: selectedTemplate.abilities.int,
-        wis: selectedTemplate.abilities.wis,
-        cha: selectedTemplate.abilities.cha,
-      });
-
-      // Map template proficiencies to available skills
-      const templateSkills = selectedTemplate.proficiencies
-        .filter((p) => availableSkills.includes(p))
-        .slice(0, skillLimit);
-      setSkills(templateSkills);
-    }
-  }, [selectedTemplate, speciesOptions, classOptions, availableSkills, skillLimit]);
-
   const [abilities, setAbilities] = useState<AbilityScores>({
     str: 15,
     dex: 14,
@@ -134,6 +82,49 @@ export function NewCharacterForm({
     cha: 8,
   });
   const [skills, setSkills] = useState<string[]>([]);
+
+  const classData = classes[classId];
+  const availableSkills = classData?.skillList ?? [];
+  const skillLimit = classData?.skillChoices ?? 2;
+
+  // Reset selections when the universe changes (class/species lists differ).
+  useEffect(() => {
+    if (classOptions.length > 0 && classId && !classOptions.some((c) => c.id === classId)) {
+      setClassId(classOptions[0]?.id ?? '');
+    }
+    if (speciesOptions.length > 0 && speciesId && !speciesOptions.some((s) => s.id === speciesId)) {
+      setSpeciesId(speciesOptions[0]?.id ?? '');
+    }
+    setSkills([]);
+    if (universe !== 'witcher') {
+      setSelectedTemplate(null);
+    }
+  }, [universe, classOptions, speciesOptions, classId, speciesId]);
+
+  // Apply a Witcher template's stats/skills when selected.
+  useEffect(() => {
+    if (!selectedTemplate) return;
+    const templateSpecies = speciesOptions.find(
+      (s) => s.name.toLowerCase() === selectedTemplate.species.toLowerCase(),
+    );
+    const templateClass = classOptions.find(
+      (c) => c.name.toLowerCase() === selectedTemplate.class.toLowerCase(),
+    );
+    if (templateSpecies) setSpeciesId(templateSpecies.id);
+    if (templateClass) setClassId(templateClass.id);
+    setAbilities({
+      str: selectedTemplate.abilities.str,
+      dex: selectedTemplate.abilities.dex,
+      con: selectedTemplate.abilities.con,
+      int: selectedTemplate.abilities.int,
+      wis: selectedTemplate.abilities.wis,
+      cha: selectedTemplate.abilities.cha,
+    });
+    const templateSkills = selectedTemplate.proficiencies
+      .filter((p) => availableSkills.includes(p))
+      .slice(0, skillLimit);
+    setSkills(templateSkills);
+  }, [selectedTemplate, speciesOptions, classOptions, availableSkills, skillLimit]);
 
   const toggleSkill = (skill: string) => {
     setSkills((prev) => {

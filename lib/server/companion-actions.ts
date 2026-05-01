@@ -2,8 +2,10 @@
 
 import { z } from 'zod';
 import { respondAsCompanion } from '../ai/companion-agent';
+import { executeRoll, renderCombatBlock } from '../ai/gm-agent';
 import { createSupabaseServerClient, createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow, MessageRow } from '../db/types';
+import { activeEncounter } from './combat';
 import { requireUser } from './auth';
 
 const schema = z.object({
@@ -55,13 +57,17 @@ export async function promptCompanion(input: {
     .order('created_at', { ascending: true });
 
   try {
-    const content = await respondAsCompanion({
+    const encounter = await activeEncounter(parsed.data.sessionId).catch(() => null);
+    const turn = await respondAsCompanion({
       sessionId: parsed.data.sessionId,
       character: character as CharacterRow,
       history: (history ?? []) as MessageRow[],
       hint: parsed.data.hint,
+      encounter,
+      combatBlock: renderCombatBlock(encounter),
+      executeRoll,
     });
-    return { ok: true, characterName: character.name, content };
+    return { ok: true, characterName: character.name, content: turn.text };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'LLM error' };
   }

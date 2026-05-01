@@ -33,6 +33,7 @@ import {
   toggleCondition,
 } from '../server/combat';
 import { respondAsCompanion } from './companion-agent';
+import { executeRoll, renderCombatBlock } from './gm-agent';
 import type { DiceRollRecord, GmEvent } from './gm-agent';
 
 export function isDebugCommand(message: string): boolean {
@@ -364,17 +365,22 @@ export async function* runDebugCommand(
         .select('*')
         .eq('session_id', sessionId)
         .order('created_at', { ascending: true });
-      const text = await respondAsCompanion({
+      const encounter = await activeEncounter(sessionId).catch(() => null);
+      const turn = await respondAsCompanion({
         sessionId,
         character: comp,
         history: history ?? [],
+        encounter,
+        combatBlock: renderCombatBlock(encounter),
+        executeRoll,
       });
-      if (text) {
+      for (const ev of turn.events) yield ev;
+      if (turn.text) {
         yield {
           type: 'companion',
           characterId: comp.id,
           characterName: comp.name,
-          content: text,
+          content: turn.text,
         };
       }
       yield { type: 'done' };

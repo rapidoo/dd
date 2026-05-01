@@ -217,6 +217,14 @@ export const GM_TOOLS: ToolDef[] = [
   },
 ];
 
+/**
+ * Tools exposed to a companion agent during its own turn. Just request_roll
+ * for now — companions roll their own attacks/damages, but state-mutating
+ * tools (start_combat, end_combat, prompt_companion, grant_item, …) stay
+ * GM-only so the companion can't escape its own turn.
+ */
+export const COMPANION_TOOLS: ToolDef[] = GM_TOOLS.filter((t) => t.name === 'request_roll');
+
 export type GmToolName = 'request_roll' | 'recall_memory' | 'record_entity';
 
 export interface RequestRollInput {

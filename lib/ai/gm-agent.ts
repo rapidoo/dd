@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { createSupabaseServiceClient } from '../db/server';
-import type { CharacterRow, MessageRow } from '../db/types';
+import type { CharacterRow, CombatEncounterRow, MessageRow } from '../db/types';
 import {
   type EntityKind,
   listEntitiesForCampaign,
@@ -14,6 +14,7 @@ import {
   activeEncounter,
   advanceTurnEncounter,
   applyDamageToCombatant,
+  type Combatant,
   endCombat,
   healCombatant,
   mutateEncounter,
@@ -37,6 +38,13 @@ Chaîne attack → damage : sur hit/crit, enchaîne IMMÉDIATEMENT request_roll(
 Soins : pour un sort/objet de soin, utilise kind="heal" (PAS "damage") avec target_combatant_id. Ex : Soins niv 1 → request_roll(kind="heal", dice="1d8+3", target_combatant_id="<PJ>"). Le serveur remonte les PV automatiquement. Utiliser kind="damage" avec un target_combatant_id sur un allié baisserait ses PV — c'est ce que tu veux SEULEMENT si c'est un coup reçu.
 
 PV & états : apply_damage(combatant_id, amount) pour dégâts/soins (négatif=soin). apply_condition(combatant_id, condition, add). Ne JAMAIS écrire les PV dans le texte — l'UI les affiche depuis la DB. start_combat seulement pour rencontres avec initiative.
+
+Tours en combat (quand un bloc "Combat actif" est présent) : tu DOIS dérouler l'initiative, pas attendre que le joueur le fasse.
+- Tour PNJ : tu décides son action, tu appelles request_roll(kind="attack", target_ac=…, target_combatant_id=<PJ/compagnon>), enchaînes damage si hit, narres, puis next_turn.
+- Tour PJ : si le joueur a parlé tu résous, sinon tu décris l'instant et tu attends. Après résolution → next_turn.
+- Tour compagnon : prompt_companion(character_id) puis next_turn quand il a fini d'agir.
+- Cible à 0 PV : tu narres sa chute mais next_turn la saute naturellement (l'ordre la garde).
+- Tu enchaînes les tours PNJ d'affilée jusqu'à retomber sur un PJ — pas d'attente entre deux PNJ. end_combat dès que tous les PNJ sont à 0.
 
 Magie/repos : cast_spell(character_id, level) consomme un emplacement. trigger_rest(character_id, "short"|"long").
 
@@ -108,6 +116,10 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
         return [];
       })
     : [];
+  const encounter = await activeEncounter(input.sessionId).catch((err) => {
+    if (process.env.NODE_ENV !== 'production') console.warn('[combat.activeEncounter]', err);
+    return null;
+  });
 
   // Per-message cap: DB allows 16 KB but shipping six full-size blocks plus
   // a 16 KB world summary on every turn ≈ 32 k tokens → ~0,50 $ / turn Opus.
@@ -142,6 +154,7 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     rollingSummary,
     knownEntities,
     input.universe ?? 'dnd5e',
+    encounter,
   );
 
   if (process.env.NODE_ENV !== 'production') {
@@ -591,6 +604,7 @@ function buildSystemPrompt(
   rollingSummary?: string | null,
   knownEntities?: Array<{ name: string; kind: string; short_description: string | null }>,
   universe?: Universe,
+  encounter?: CombatEncounterRow | null,
 ): string {
   // Default to dnd5e if universe is not provided
   const effectiveUniverse = universe ?? 'dnd5e';
@@ -633,12 +647,13 @@ function buildSystemPrompt(
     ? `\nJusqu'ici dans cette veillée (résumé, les faits sont canon) :\n${clipText(rollingSummary.trim(), 3000)}\n`
     : '';
   const memoryBlock = buildMemoryBlock(knownEntities ?? []);
+  const combatBlock = renderCombatBlock(encounter ?? null);
 
   // Build universe-specific system prompt
   const basePrompt = effectiveUniverse === 'witcher' ? GM_SYSTEM_PROMPT_WITCHER : GM_SYSTEM_PROMPT;
 
   return `${basePrompt}
-${worldBlock}${rollingBlock}${memoryBlock}
+${worldBlock}${rollingBlock}${memoryBlock}${combatBlock}
 Équipe actuelle :
 ${partyLines.join('\n')}
 
@@ -656,6 +671,12 @@ Chaîne attack → damage : sur hit/crit, enchaîne IMMÉDIATEMENT request_roll(
 Soins : pour un sort/objet de soin, utilise kind="heal" avec target_combatant_id. Ex : Soins → request_roll(kind="heal", dice="1d8+3", target_combatant_id="<PJ>").
 
 PV & états : apply_damage(combatant_id, amount) pour dégâts/soins (négatif=soin). apply_condition(combatant_id, condition, add).
+
+Tours en combat (quand un bloc "Combat actif" est présent) : tu DOIS dérouler l'initiative.
+- Tour PNJ : tu décides son action, request_roll(kind="attack", target_ac=…, target_combatant_id=<PJ/compagnon>), damage si hit, narres, next_turn.
+- Tour PJ : tu résous s'il a parlé, sinon tu décris et tu attends. next_turn après résolution.
+- Tour compagnon : prompt_companion(character_id), puis next_turn.
+- Cible à 0 PV : narre la chute, next_turn la saute. end_combat dès que tous les PNJ sont à 0.
 
 Magie : les "signes" sont la magie des sorceleurs. Pas de sorts traditionnels D&D. cast_spell n'est PAS utilisé — utilise des actions descriptives.
 
@@ -681,28 +702,33 @@ async function executeCompanion(
     .select('*')
     .eq('session_id', sessionId)
     .order('created_at', { ascending: true });
-  const text = await respondAsCompanion({
+  const encounter = await activeEncounter(sessionId).catch(() => null);
+  const combatBlock = renderCombatBlock(encounter);
+  const turn = await respondAsCompanion({
     sessionId,
     character,
     history: history ?? [],
     hint: input.hint,
+    encounter,
+    combatBlock,
+    executeRoll,
   });
+  const events: GmEvent[] = [...turn.events];
+  if (turn.text) {
+    events.push({
+      type: 'companion',
+      characterId: character.id,
+      characterName: character.name,
+      content: turn.text,
+    });
+  }
   return {
-    result: { said: text || '(silence)' },
-    events: text
-      ? [
-          {
-            type: 'companion',
-            characterId: character.id,
-            characterName: character.name,
-            content: text,
-          },
-        ]
-      : [],
+    result: { said: turn.text || '(silence)' },
+    events,
   };
 }
 
-async function executeRoll(
+export async function executeRoll(
   input: RequestRollInput,
   sessionId: string,
 ): Promise<{ result: unknown; events: GmEvent[] }> {
@@ -766,7 +792,12 @@ async function executeRoll(
     if (await combatantBelongsToSession(sessionId, targetId)) {
       try {
         const signed = input.kind === 'heal' ? -roll.total : roll.total;
-        const res = await applyDamageToCharacter(targetId, signed);
+        // Route by id shape: NPC combatants live only in the encounter row,
+        // PC/companion HP lives in characters (and is mirrored in the
+        // encounter combatants array). applyDamageInSession picks the
+        // right path so request_roll(damage, target="npc-…") actually
+        // lowers the kobold's HP.
+        const res = await applyDamageInSession(sessionId, targetId, signed);
         const newHp = (res.result as { current_hp?: number } | null)?.current_hp;
         applied = { target: targetId, newHp, mode: input.kind as 'damage' | 'heal' };
         for (const ev of res.events) events.push(ev);
@@ -881,6 +912,43 @@ function buildMemoryBlock(
   return `\nMémoire (sois cohérent) :\n${lines.join('\n')}\n`;
 }
 
+const COMBATANT_KIND_LABEL: Record<Combatant['kind'], string> = {
+  pc: 'PJ',
+  companion: 'compagnon',
+  npc: 'PNJ',
+};
+
+/**
+ * Render the active combat as a compact block for the GM (and companion)
+ * system prompt. Without this block the model has no idea who's in
+ * initiative, whose turn it is, or what target ids to pass to request_roll.
+ */
+export function renderCombatBlock(encounter: CombatEncounterRow | null): string {
+  if (!encounter || encounter.status !== 'active') return '';
+  const order = encounter.initiative_order ?? [];
+  const combatants = (encounter.combatants as Combatant[]) ?? [];
+  if (order.length === 0 || combatants.length === 0) return '';
+  const byId = new Map(combatants.map((c) => [c.id, c]));
+  const currentEntry = order[encounter.current_turn_index];
+  const current = currentEntry ? byId.get(currentEntry.id) : undefined;
+  const lines = order.map((entry, idx) => {
+    const c = byId.get(entry.id);
+    if (!c) return null;
+    const cursor = idx === encounter.current_turn_index ? '▶' : ' ';
+    const kind = COMBATANT_KIND_LABEL[c.kind];
+    const hp = c.currentHP <= 0 ? `0/${c.maxHP} — abattu` : `${c.currentHP}/${c.maxHP} PV`;
+    const conds =
+      c.conditions && c.conditions.length > 0
+        ? ` [${c.conditions.map((x) => x.type).join(', ')}]`
+        : '';
+    return `  ${cursor} ${idx + 1}. ${c.name} (${kind}, ${hp}, CA ${c.ac})${conds} — id="${c.id}"`;
+  });
+  const header = current
+    ? `Combat actif — round ${encounter.round}, tour de ${current.name} (${COMBATANT_KIND_LABEL[current.kind]}).`
+    : `Combat actif — round ${encounter.round}.`;
+  return `\n${header}\nInitiative :\n${lines.filter(Boolean).join('\n')}\n`;
+}
+
 function describeWeapons(character: CharacterRow): string[] {
   const items = (character.inventory as InventoryItem[] | null) ?? [];
   const weapons = items.filter((i) => i.type === 'weapon' && i.weapon?.damageDice);
@@ -911,6 +979,51 @@ function contentLength(msg: ChatMessage): number {
 export function hasRollDelegation(text: string): boolean {
   if (!text || text.length < 5) return false;
   return ROLL_DELEGATION_PATTERNS.some((re) => re.test(text));
+}
+
+/**
+ * Apply HP delta to whatever combatant id is given. NPC ids (`npc-…`) live
+ * only in the active encounter's combatants array; PC/companion ids are
+ * UUIDs against `characters` (HP also mirrored into encounter.combatants
+ * when an encounter is active).
+ */
+async function applyDamageInSession(
+  sessionId: string,
+  combatantId: string,
+  amount: number,
+): Promise<{ result: unknown; events: GmEvent[] }> {
+  const isNpc = combatantId.startsWith('npc-');
+  if (isNpc) {
+    const enc = await activeEncounter(sessionId);
+    if (!enc) {
+      return { result: { error: 'PNJ ciblé sans rencontre active' }, events: [] };
+    }
+    const next = await mutateEncounter(enc.id, (e) =>
+      amount >= 0
+        ? applyDamageToCombatant(e, combatantId, amount)
+        : healCombatant(e, combatantId, -amount),
+    );
+    const c = (next.combatants as Combatant[]).find((x) => x.id === combatantId);
+    return {
+      result: { ok: true, current_hp: c?.currentHP, max_hp: c?.maxHP },
+      events: [{ type: 'combat_update' }],
+    };
+  }
+  // PC / companion : update characters row, and mirror into encounter row
+  // so the initiative panel stays in sync.
+  const charResult = await applyDamageToCharacter(combatantId, amount);
+  const enc = await activeEncounter(sessionId).catch(() => null);
+  if (enc) {
+    await mutateEncounter(enc.id, (e) =>
+      amount >= 0
+        ? applyDamageToCombatant(e, combatantId, amount)
+        : healCombatant(e, combatantId, -amount),
+    ).catch(() => {
+      // Mirror failure shouldn't fail the whole roll — characters row is
+      // the source of truth for PC HP outside combat.
+    });
+  }
+  return charResult;
 }
 
 async function applyDamageToCharacter(
