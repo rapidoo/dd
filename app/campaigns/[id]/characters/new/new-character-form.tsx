@@ -1,12 +1,21 @@
 'use client';
 
 import { useActionState, useMemo, useState } from 'react';
+
 import { BtnPrimary } from '../../../../../components/ui/button';
 import { Stat } from '../../../../../components/ui/stat';
 import type { CharacterRow, Universe } from '../../../../../lib/db/types';
 import { deriveCharacter } from '../../../../../lib/rules/derivations';
-import { getClassOptions, getClassesForUniverse, getSpeciesForUniverse, getSpeciesOptions } from '../../../../../lib/rules/srd';
+import {
+  getClassesForUniverse,
+  getClassOptions,
+  getSpeciesOptions,
+} from '../../../../../lib/rules/srd';
 import type { AbilityScores } from '../../../../../lib/rules/types';
+import {
+  getWitcherTemplates,
+  type WitcherCharacterTemplate,
+} from '../../../../../lib/rules/witcher-templates';
 import type { ServerResult } from '../../../../../lib/server/campaigns';
 import { createCharacter } from '../../../../../lib/server/characters';
 
@@ -40,7 +49,13 @@ const SKILL_LABELS: Record<string, string> = {
   survival: 'Survie',
 };
 
-export function NewCharacterForm({ campaignId, universe: campaignUniverse }: { campaignId: string; universe: Universe }) {
+export function NewCharacterForm({
+  campaignId,
+  universe: campaignUniverse,
+}: {
+  campaignId: string;
+  universe: Universe;
+}) {
   const [state, formAction] = useActionState<ServerResult<CharacterRow> | null, FormData>(
     createCharacter,
     null,
@@ -48,25 +63,68 @@ export function NewCharacterForm({ campaignId, universe: campaignUniverse }: { c
   // Allow override universe for testing before DB migration is applied
   const [universe, setUniverse] = useState<Universe>(campaignUniverse);
   const classes = getClassesForUniverse(universe);
-  const species = getSpeciesForUniverse(universe);
   const classOptions = getClassOptions(universe);
   const speciesOptions = getSpeciesOptions(universe);
-  
+
+  // Templates are only available for The Witcher universe
+  const witcherTemplates = getWitcherTemplates();
+  const [selectedTemplate, setSelectedTemplate] = useState<WitcherCharacterTemplate | null>(null);
+
   // Default to first available class and species for the universe
   const [classId, setClassId] = useState(classOptions[0]?.id ?? 'fighter');
   const [speciesId, setSpeciesId] = useState(speciesOptions[0]?.id ?? 'human');
-  
+
   // Reset selections when universe changes
   useMemo(() => {
     // When universe changes, reset to first available options
-    if (classOptions.length > 0 && classId && !classOptions.some(c => c.id === classId)) {
-      setClassId(classOptions[0]!.id);
+    if (classOptions.length > 0 && classId && !classOptions.some((c) => c.id === classId)) {
+      setClassId(classOptions[0]?.id ?? '');
     }
-    if (speciesOptions.length > 0 && speciesId && !speciesOptions.some(s => s.id === speciesId)) {
-      setSpeciesId(speciesOptions[0]!.id);
+    if (speciesOptions.length > 0 && speciesId && !speciesOptions.some((s) => s.id === speciesId)) {
+      setSpeciesId(speciesOptions[0]?.id ?? '');
     }
     setSkills([]);
+    // Clear template selection if universe is not witcher
+    if (universe !== 'witcher') {
+      setSelectedTemplate(null);
+    }
   }, [universe, classOptions, speciesOptions, classId, speciesId]);
+
+  const classData = classes[classId];
+  const availableSkills = classData?.skillList ?? [];
+  const skillLimit = classData?.skillChoices ?? 2;
+
+  // Apply template when selected
+  useMemo(() => {
+    if (selectedTemplate) {
+      // Find matching species and class IDs
+      const templateSpecies = speciesOptions.find(
+        (s) => s.name.toLowerCase() === selectedTemplate.species.toLowerCase(),
+      );
+      const templateClass = classOptions.find(
+        (c) => c.name.toLowerCase() === selectedTemplate.class.toLowerCase(),
+      );
+
+      if (templateSpecies) setSpeciesId(templateSpecies.id);
+      if (templateClass) setClassId(templateClass.id);
+
+      setAbilities({
+        str: selectedTemplate.abilities.str,
+        dex: selectedTemplate.abilities.dex,
+        con: selectedTemplate.abilities.con,
+        int: selectedTemplate.abilities.int,
+        wis: selectedTemplate.abilities.wis,
+        cha: selectedTemplate.abilities.cha,
+      });
+
+      // Map template proficiencies to available skills
+      const templateSkills = selectedTemplate.proficiencies
+        .filter((p) => availableSkills.includes(p))
+        .slice(0, skillLimit);
+      setSkills(templateSkills);
+    }
+  }, [selectedTemplate, speciesOptions, classOptions, availableSkills, skillLimit]);
+
   const [abilities, setAbilities] = useState<AbilityScores>({
     str: 15,
     dex: 14,
@@ -76,10 +134,6 @@ export function NewCharacterForm({ campaignId, universe: campaignUniverse }: { c
     cha: 8,
   });
   const [skills, setSkills] = useState<string[]>([]);
-
-  const classData = classes[classId];
-  const availableSkills = classData?.skillList ?? [];
-  const skillLimit = classData?.skillChoices ?? 2;
 
   const toggleSkill = (skill: string) => {
     setSkills((prev) => {
@@ -110,13 +164,51 @@ export function NewCharacterForm({ campaignId, universe: campaignUniverse }: { c
     return <p className="mt-1 text-xs text-blood">{errs[0]}</p>;
   };
 
+  // Add hidden inputs for template data
+  const templateHiddenInputs = selectedTemplate ? (
+    <>
+      <input type="hidden" name="templateId" value={selectedTemplate.id} />
+      <input type="hidden" name="name" value={selectedTemplate.name} />
+      <input type="hidden" name="level" value={selectedTemplate.level} />
+      <input type="hidden" name="speciesId" value={speciesId} />
+      <input type="hidden" name="classId" value={classId} />
+      <input type="hidden" name="str" value={selectedTemplate.abilities.str} />
+      <input type="hidden" name="dex" value={selectedTemplate.abilities.dex} />
+      <input type="hidden" name="con" value={selectedTemplate.abilities.con} />
+      <input type="hidden" name="int" value={selectedTemplate.abilities.int} />
+      <input type="hidden" name="wis" value={selectedTemplate.abilities.wis} />
+      <input type="hidden" name="cha" value={selectedTemplate.abilities.cha} />
+      <input type="hidden" name="maxHP" value={selectedTemplate.max_hp} />
+      <input type="hidden" name="ac" value={selectedTemplate.ac} />
+      <input type="hidden" name="speed" value={selectedTemplate.speed} />
+      {selectedTemplate.proficiencies.map((p) => (
+        <input key={`prof-${p}`} type="hidden" name="proficiencies" value={p} />
+      ))}
+      {selectedTemplate.features.map((f) => (
+        <input key={`feat-${f.name}`} type="hidden" name="features" value={JSON.stringify(f)} />
+      ))}
+      {selectedTemplate.inventory.map((item) => (
+        <input
+          key={`inv-${item.name}-${item.type}`}
+          type="hidden"
+          name="inventory"
+          value={JSON.stringify(item)}
+        />
+      ))}
+      {skills.map((s) => (
+        <input key={`skill-${s}`} type="hidden" name="skillProficiencies" value={s} />
+      ))}
+    </>
+  ) : null;
+
   return (
     <form action={formAction} className="flex flex-col gap-8">
       <input type="hidden" name="campaignId" value={campaignId} />
-      <input type="hidden" name="level" value={1} />
+      <input type="hidden" name="level" value={selectedTemplate ? selectedTemplate.level : 1} />
       {skills.map((s) => (
         <input key={s} type="hidden" name="skillProficiencies" value={s} />
       ))}
+      {templateHiddenInputs}
 
       {/* Universe selector for Witcher/D&D - allows testing before DB migration */}
       {process.env.NODE_ENV !== 'production' && (
@@ -133,6 +225,63 @@ export function NewCharacterForm({ campaignId, universe: campaignUniverse }: { c
         </label>
       )}
 
+      {/* Witcher Character Templates */}
+      {universe === 'witcher' && (
+        <section className="border border-line bg-card p-4">
+          <p className="mb-3 font-display text-sm uppercase tracking-[0.3em] text-gold">
+            ✧ Modèles de personnages
+          </p>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {witcherTemplates.map((template) => {
+              const isSelected = selectedTemplate?.id === template.id;
+              return (
+                <button
+                  key={template.id}
+                  type="button"
+                  onClick={() => setSelectedTemplate(isSelected ? null : template)}
+                  className={`flex flex-col gap-2 rounded-lg border p-4 text-left transition-all ${
+                    isSelected
+                      ? 'border-gold bg-[rgba(212,166,76,0.1)]'
+                      : 'border-line bg-transparent hover:border-gold'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-narr text-lg font-bold text-gold-bright">
+                      {template.name}
+                    </span>
+                    <span className="text-xs text-text-mute">Niv. {template.level}</span>
+                  </div>
+                  <p className="text-xs text-text-mute line-clamp-2">{template.description}</p>
+                  <div className="flex gap-2 text-xs">
+                    <span className="rounded bg-[rgba(0,0,0,0.4)] px-2 py-1 text-text-faint">
+                      {template.species}
+                    </span>
+                    <span className="rounded bg-[rgba(0,0,0,0.4)] px-2 py-1 text-text-faint">
+                      {template.class}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {selectedTemplate && (
+            <div className="mt-4 flex items-center justify-between">
+              <p className="text-sm text-text-mute">
+                Modèle sélectionné :{' '}
+                <span className="font-bold text-gold">{selectedTemplate.name}</span>
+              </p>
+              <button
+                type="button"
+                onClick={() => setSelectedTemplate(null)}
+                className="text-sm text-text-mute hover:text-gold transition-colors"
+              >
+                Annuler
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
       <section className="grid gap-4 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-xs uppercase tracking-[0.2em] text-text-mute">
           Nom
@@ -141,8 +290,13 @@ export function NewCharacterForm({ campaignId, universe: campaignUniverse }: { c
             name="name"
             required
             maxLength={80}
-            className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-lg text-text outline-none focus:border-gold"
-            placeholder="Elspeth Courtecire"
+            value={selectedTemplate ? selectedTemplate.name : ''}
+            disabled={!!selectedTemplate}
+            onChange={(_e) => {
+              // Name is controlled by template when selected
+            }}
+            className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-lg text-text outline-none focus:border-gold disabled:opacity-50 disabled:cursor-not-allowed"
+            placeholder={selectedTemplate ? '' : 'Elspeth Courtecire'}
           />
           {fieldError('name')}
         </label>
@@ -165,7 +319,8 @@ export function NewCharacterForm({ campaignId, universe: campaignUniverse }: { c
             name="speciesId"
             value={speciesId}
             onChange={(e) => setSpeciesId(e.target.value)}
-            className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold"
+            disabled={!!selectedTemplate}
+            className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {speciesOptions.map((s) => (
               <option key={s.id} value={s.id}>
@@ -183,7 +338,8 @@ export function NewCharacterForm({ campaignId, universe: campaignUniverse }: { c
               setClassId(e.target.value);
               setSkills([]);
             }}
-            className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold"
+            disabled={!!selectedTemplate}
+            className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {classOptions.map((c) => (
               <option key={c.id} value={c.id}>
@@ -216,7 +372,8 @@ export function NewCharacterForm({ campaignId, universe: campaignUniverse }: { c
                 onChange={(e) =>
                   setAbilities((prev) => ({ ...prev, [key]: Number(e.target.value) }))
                 }
-                className="w-14 rounded-none border-0 bg-transparent text-center font-narr text-2xl text-gold-bright outline-none"
+                disabled={!!selectedTemplate}
+                className="w-14 rounded-none border-0 bg-transparent text-center font-narr text-2xl text-gold-bright outline-none disabled:opacity-50 disabled:cursor-not-allowed"
               />
             </label>
           ))}
@@ -235,12 +392,12 @@ export function NewCharacterForm({ campaignId, universe: campaignUniverse }: { c
               <button
                 key={s}
                 type="button"
-                disabled={full}
+                disabled={full || !!selectedTemplate}
                 onClick={() => toggleSkill(s)}
                 className={`border px-3 py-2 text-left font-narr text-sm transition-colors ${
                   selected
                     ? 'border-gold bg-[rgba(212,166,76,0.1)] text-gold-bright'
-                    : full
+                    : full || selectedTemplate
                       ? 'border-line text-text-faint'
                       : 'border-line text-text hover:border-gold'
                 }`}
