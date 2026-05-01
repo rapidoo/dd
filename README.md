@@ -8,7 +8,7 @@ Plateforme web permettant de jouer à Donjons & Dragons 5e en solo avec un MJ IA
 - **Front** : Next.js 16 (App Router) · React 19 · TypeScript strict · Tailwind v4
 - **Back** : Next.js Server Actions · Route Handlers (SSE)
 - **Data** : Supabase Postgres (état transactionnel, RLS) · Neo4j AuraDB (mémoire de campagne — entités, sessions, faits narratifs)
-- **LLM** : abstraction multi-provider (`lib/ai/llm/`) — **Anthropic** (stable) ou **Ollama / Gemma 4** (expérimental, dev-only)
+- **LLM** : abstraction multi-provider (`lib/ai/llm/`) — **Anthropic** (stable), **Mistral** (nouveau), ou **Ollama / Gemma 4** (expérimental, dev-only)
 - **Validation** : Zod · **Tests** : Vitest · **Lint** : Biome
 
 Voir `spec.md` pour l'architecture complète et `dnd5e_rules.md` pour les règles.
@@ -24,6 +24,23 @@ Le switch `LLM_PROVIDER` (env) choisit le backend :
 | **GM** | `claude-opus-4-7` | Narration MJ (seul rôle sur Opus — richesse stylistique visible au joueur) |
 | COMPANION | `claude-haiku-4-5` | Voix des compagnons IA |
 | UTIL | `claude-haiku-4-5` | Concierge (entités + butin) + résumé roulant |
+
+### Mistral — **nouveau provider, configuration simple**
+
+Provider alternatif utilisant l'API Mistral. Configuration requise dans `.env.local`:
+
+```bash
+LLM_PROVIDER=mistral
+MISTRAL_API_KEY=votre_clé_api
+# MISTRAL_BASE_URL=https://api.mistral.ai (optionnel, par défaut)
+```
+
+| Rôle | Modèle par défaut | Usage |
+|---|---|---|
+| BUILDER | `mistral-large-2407` | Création de PJ/compagnons |
+| **GM** | `mistral-large-2407` | Narration MJ |
+| COMPANION | `mistral-small-2402` | Voix des compagnons IA |
+| UTIL | `mistral-small-2402` | Concierge + résumé roulant |
 
 ### Ollama (Gemma 4) — **⚠️ en cours de stabilisation, non production-ready**
 
@@ -85,6 +102,30 @@ pnpm dev
 | 10 | Repos court et long |
 | 11 | Mémoire Neo4j + journal |
 | 12 | Polish + docs |
+| 13 | **Support The Witcher** — univers alternatif avec races, classes, modules et mécaniques uniques (signes, alchimie, faiblesses des monstres, moralité grise) |
+
+## Univers pris en charge
+
+### Donjons & Dragons 5e (SRD 5.1)
+Le système par défaut, pleinement implémenté avec règles complètes (jets, combat, sorts, repos, etc.).
+
+### The Witcher — **nouveau**
+
+Support complet pour l'univers de The Witcher avec :
+
+- **5 races** : Humain, Elfe, Nain, Demi-Elfe, Halfelin
+- **6 classes** : Sorceleur, Mage, Voleur, Éclaireur, Guerrier, Alchimiste
+- **4 modules pré-configurés** :
+  - Le Contrat du Village Maudit (Niv. 1-2)
+  - L'Héritage de la Sorcière (Niv. 2-3)
+  - La Malédiction du Bois de Brokilon (Niv. 3-4)
+  - Le Tournoi de la Lame Noire (Niv. 4-6)
+- **Système de signes** (Igni, Aard, Quen, Yrden, Axii) — *à venir*
+- **Alchimie** (potions, ingrédients, risques) — *à venir*
+- **Faiblesses des monstres** (multiplicateurs de dégâts) — *à venir*
+- **Moralité grise et réputation** — *à venir*
+
+La sélection de l'univers se fait lors de la création de campagne. Toutes les données (races, classes, modules) sont automatiquement filtrées selon l'univers choisi.
 
 ## Commandes
 
@@ -185,3 +226,12 @@ couverture). Audit détaillé contre `dnd5e_rules.md` :
 - Point-buy 8–15 sur le wizard de création de PJ
 - Playwright e2e sur les parcours critiques
 - Déploiement Vercel + preview URL
+
+### The Witcher — Roadmap
+- [ ] **Modèles de personnages** : Geralt (Sorceleur 5), Jaskier (Barde 4), Yennefer (Mage 5), Zoltan (Guerrier 4), Regis (Alchimiste Vampire 5)
+- [ ] Implémentation complète des **12 races** et **10 classes** de l'univers
+- [ ] Système de **signes** avec gestion des emplacements et coûts
+- [ ] Système d'**alchimie** (potions, bombes, huiles)
+- [ ] **Faiblesses des monstres** avec multiplicateurs de dégâts automatiques
+- [ ] **Système de réputation** et moralité grise
+- [ ] 6 modules supplémentaires pour couvrir les niveaux 1-10
