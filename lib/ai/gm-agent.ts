@@ -218,29 +218,46 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     }
 
     // Textual tool-call safeguard. Local models (gemma4) sometimes write
-    // `start_combat(npcs=[...])` or a bare `next_turn` line in the narration
-    // instead of emitting a structured tool_call. The combat would never
-    // actually start. Detect, reprompt, and retry once or twice.
-    if (
-      response.toolCalls.length === 0 &&
-      hasTextualToolCall(fullText) &&
-      repromptRetries < MAX_REPROMPT_RETRIES
-    ) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn('[gm] textual tool-call detected — reprompting');
+    // `start_combat(npcs=[...])`, `request_roll{...}`, or a JSON blob in the
+    // narration instead of emitting a structured tool_call. The combat would
+    // never actually start. Detect, reprompt, and retry up to MAX_REPROMPT.
+    if (response.toolCalls.length === 0 && hasTextualToolCall(fullText)) {
+      if (repromptRetries < MAX_REPROMPT_RETRIES) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[gm] textual tool-call detected — reprompting');
+        }
+        repromptRetries++;
+        toolIterations--;
+        messages.push({
+          role: 'assistant',
+          content: "(tour rejeté : outil écrit en texte au lieu d'un tool_call)",
+        });
+        messages.push({
+          role: 'user',
+          content:
+            'Tu as écrit le nom d\'un outil dans la narration (ex: "start_combat(...)" ou "next_turn"). C\'est interdit — le joueur le voit en clair et le serveur n\'exécute rien. Reprends ce tour : invoque l\'outil via le canal tool_calls structuré, et laisse la narration en texte naturel uniquement.',
+        });
+        continue;
       }
-      repromptRetries++;
-      toolIterations--;
-      messages.push({
-        role: 'assistant',
-        content: "(tour rejeté : outil écrit en texte au lieu d'un tool_call)",
-      });
-      messages.push({
-        role: 'user',
-        content:
-          'Tu as écrit le nom d\'un outil dans la narration (ex: "start_combat(...)" ou "next_turn"). C\'est interdit — le joueur le voit en clair et le serveur n\'exécute rien. Reprends ce tour : invoque l\'outil via le canal tool_calls structuré, et laisse la narration en texte naturel uniquement.',
-      });
-      continue;
+      // Retries exhausted on a stubborn model. Don't let the combat stall:
+      // sanitize whatever prose we have, advance the cursor so the next
+      // combatant gets a chance, and close the turn cleanly.
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[gm] textual tool-call retries exhausted — advancing combat cursor');
+      }
+      const cleaned = sanitizeNarration(fullText);
+      if (cleaned) yield { type: 'text_delta', delta: cleaned };
+      try {
+        const adv = await advanceUntilNextActor(input.sessionId);
+        if (adv.state) yield { type: 'combat_state', state: adv.state };
+        if (adv.ended) yield { type: 'combat_ended' };
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[gm.advance] fallback advance failed', err);
+        }
+      }
+      yield { type: 'done' };
+      return;
     }
 
     // Companion-without-narration safeguard. If the GM hands the mic to a
@@ -739,21 +756,25 @@ TON. Les PJ sont des bras cassés héroïques, pas des élus du destin. Récompe
 
 Univers. Année 1042. Royaumes : Waldorg-la-Verticale, Glargh, Mortebranche, Côte des Ogres (Alaykjdu), Pics Givrants (forteresses naines). Lieu canonique : Auberge de la Truie qui File (Maître Bouldegom, Suzanne la servante). Antagoniste récurrent : Zangdar le Sorcier (Donjon de Naheulbeuk, allergique à la mauvaise musique). Sbire : Reivax (bègue, lâche). Panthéon ridicule : Reuk (Père-Tout-Puissant), Hashpout (Moisson), Brorne (Forge), Crôm (Saoulard), Gladeulfeurha (Beauté Discutable), Dlul (Sommeil), Mankdebol (Loose), Ouilff (Chaussettes Dépareillées), Khel (Bons Conseils), Slanoush (Putréfaction). Magie : peut foirer (Table des Foirages : grenouille apparue dans la poche, voix de canard, cheveux qui blanchissent, etc.).
 
-Jets : TOUJOURS via l'outil request_roll avant de décrire l'issue. Jamais "Fais un jet", "Lance un dé", "Jette les dés".
+RÈGLE CRITIQUE — Outils : tu disposes d'outils (request_roll, start_combat, apply_damage, apply_condition, prompt_companion, grant_item, adjust_currency, cast_spell, trigger_rest, record_entity, recall_memory). Tu les invoques UNIQUEMENT via le canal tool_calls structuré. N'écris JAMAIS leur nom dans la narration en prose. Si tu as besoin d'un outil, émets un tool_call ; sinon raconte simplement la scène.
 
-Chaîne attack → damage : sur hit/crit, enchaîne IMMÉDIATEMENT request_roll(kind="damage", dice="<arme+mod>", target_combatant_id="<UUID cible>"). Le serveur APPLIQUE automatiquement les dégâts. Sur crit, double les dés ("2d8+3" au lieu de "1d8+3"). Nat 20 = critique, nat 1 = complication ridicule (l'arme glisse, un parchemin tombe, etc.).
+Combat — pilotage SERVEUR : le serveur enchaîne automatiquement les tours (skip des combattants à 0 PV inclus) et termine la rencontre quand tous les ennemis sont à terre. Pas d'outil "tour suivant" ni "fin de combat". Sur ton tour ou celui d'un PNJ : narre, lance le jet via tool_call, c'est tout.
 
-Soins : kind="heal" avec target_combatant_id. Ex : Soins → request_roll(kind="heal", dice="1d8+3", target_combatant_id="<PJ>").
+Jets de dés : TOUJOURS via l'outil de jet avant de décrire l'issue. Jamais "Fais un jet" / "Lance un dé" / "Jette les dés" en texte.
 
-PV & états : apply_damage(combatant_id, amount) (négatif=soin). apply_condition(combatant_id, condition, add). Ne JAMAIS écrire les PV dans le texte.
+Chaîne attaque → dégâts : sur touche/crit, enchaîne IMMÉDIATEMENT un jet de dégâts (kind="damage", target_combatant_id=<UUID cible>) via tool_call. Le serveur applique automatiquement. Sur crit, double les dés d'arme. Nat 20 = critique, nat 1 = complication ridicule (l'arme glisse, un parchemin tombe, etc.).
 
-Tours en combat (quand un bloc "Combat actif" est présent) : tu DOIS dérouler l'initiative.
-- Tour PNJ : action, request_roll(kind="attack", target_ac=…, target_combatant_id=…), damage si hit, narres, next_turn.
-- Tour PJ : tu résous s'il a parlé, sinon tu décris et tu attends. next_turn après résolution.
-- Tour compagnon : prompt_companion(character_id), puis next_turn.
-- Cible à 0 PV : narre la chute (style Naheulbeuk : glissade ridicule, KO parce qu'a glissé sur du sang gobelin), next_turn la saute. end_combat dès que tous les PNJ sont à 0.
+Soins : kind="heal" + target_combatant_id pour faire remonter les PV.
 
-Magie/repos : cast_spell(character_id, level) consomme un emplacement. trigger_rest(character_id, "short"|"long").
+PV & états : utilise les outils dégâts/conditions. Ne JAMAIS écrire les PV en texte.
+
+Tours en combat (bloc "Combat actif" présent) :
+- Tour PNJ : action, jet d'attaque (target_ac, target_combatant_id), dégâts si touche, narre. Le serveur enchaîne.
+- Tour PJ : résous s'il a parlé, sinon décris et attends son input.
+- Tour compagnon : donne-lui la parole via l'outil compagnon. Le serveur enchaîne.
+- Cible à 0 PV : narre sa chute (style Naheulbeuk : glissade ridicule, KO parce qu'a glissé sur du sang gobelin). Le serveur saute le tour et termine quand tous les PNJ sont à 0.
+
+Magie/repos : utilise les outils dédiés pour consommer un emplacement de sort ou déclencher un repos.
 
 Butin : narre librement qui ramasse/donne/dépense quoi — un concierge post-tour met à jour bourses et inventaires. Coffres typiques : 2d6 PO + un chausson dépareillé, un pot de cornichons, une perruque rousse.
 
@@ -852,13 +873,10 @@ export async function executeRoll(
     },
   ];
 
-  // Auto-apply damage to a named target. Tenant-guarded so a hallucinated
-  // UUID can't touch another campaign. Works for NPC combatants too
-  // (prefix `npc-` is allowed by combatantBelongsToSession).
   // Auto-apply damage / heal when the GM targeted a combatant. Routes through
   // applyDamageToParticipant which handles both NPC (jsonb) and PC (characters
-  // row, source of truth) cases. After NPC damage that puts them at 0 HP we
-  // also advance the cursor to the next living actor — server-authoritative.
+  // row, source of truth) cases. Tenant-guarded so a hallucinated UUID can't
+  // touch another campaign.
   let applied: { target: string; newHp?: number; mode?: 'damage' | 'heal' } | null = null;
   const applyable =
     (input.kind === 'damage' || input.kind === 'heal') &&
@@ -877,21 +895,8 @@ export async function executeRoll(
             mode: input.kind as 'damage' | 'heal',
           };
           if (res.state) events.push({ type: 'combat_state', state: res.state });
-          // If we just downed an NPC, advance the cursor (skip dead, auto-end).
-          const target = res.state?.participants.find((p) => p.id === targetId);
-          if (target?.kind === 'npc' && target.currentHP <= 0) {
-            const adv = await advanceUntilNextActor(sessionId);
-            if (adv.state) events.push({ type: 'combat_state', state: adv.state });
-            if (adv.ended) events.push({ type: 'combat_ended' });
-          }
         } else if (process.env.NODE_ENV !== 'production') {
           console.warn(`[gm.${input.kind}] auto-apply rejected`, res.error);
-        }
-        if (process.env.NODE_ENV !== 'production' && res.ok) {
-          const verb = input.kind === 'heal' ? 'healed' : 'damaged';
-          console.debug(
-            `[gm.${input.kind}] auto-${verb} ${roll.total} on ${targetId} → ${res.currentHP} HP`,
-          );
         }
       } catch (err) {
         if (process.env.NODE_ENV !== 'production') {
@@ -900,6 +905,28 @@ export async function executeRoll(
       }
     } else if (process.env.NODE_ENV !== 'production') {
       console.warn(`[gm.${input.kind}] target ${targetId} not in session — not applied`);
+    }
+  }
+
+  // Server-authoritative turn advance. The active actor's turn ends after:
+  //   • a damage or heal roll (the action's resolution roll), OR
+  //   • an attack roll that misses (no follow-up damage will come).
+  // Hits don't advance — the GM chains a damage roll which then advances. Saves
+  // and skill checks don't advance (they're side-rolls during a broader turn).
+  // advanceUntilNextActor is a safe no-op when no encounter is active.
+  const finishesTurn =
+    input.kind === 'damage' ||
+    input.kind === 'heal' ||
+    (input.kind === 'attack' && roll.outcome === 'miss');
+  if (finishesTurn) {
+    try {
+      const adv = await advanceUntilNextActor(sessionId);
+      if (adv.state) events.push({ type: 'combat_state', state: adv.state });
+      if (adv.ended) events.push({ type: 'combat_ended' });
+    } catch (err) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[gm.advance] auto-advance failed', err);
+      }
     }
   }
 

@@ -29,32 +29,67 @@ const TOOL_NAMES = [
   'prompt_companion',
 ] as const;
 
+// Keys that only appear inside tool-call payloads (kind="attack", target_ac=…).
+// We use them to detect orphan key:value blobs the model spilled into prose
+// without a leading `tool_name(`. Two or more on the same line ⇒ tool-call leak.
+const TOOL_ARG_KEYS = [
+  'kind',
+  'dice',
+  'target_ac',
+  'target_combatant_id',
+  'combatant_id',
+  'amount',
+  'dc',
+  'npcs',
+  'condition',
+  'character_id',
+  'duration_rounds',
+  'spell_level',
+  'spell_name',
+] as const;
+
 /**
  * Remove tool-call syntax that the model wrote into prose instead of emitting
  * via the structured `tool_calls` channel. gemma4 occasionally prints
- * `start_combat(npcs=[…])` or a bare `next_turn` line — it leaks into the chat
- * UI as gibberish. We strip:
- *   1. `tool_name(…balanced parens…)` anywhere in the text
- *   2. a bare `tool_name` alone on its line (no parens — gemma4 case)
+ * `start_combat(npcs=[…])`, a bare `next_turn` line, `request_roll{dice:…}`
+ * (curly braces), or even an orphan key:value blob without the function name
+ * (e.g. `dice:1d20+5,kind:attack,target_combatant_id:npc-…}`).
+ *
+ * We strip, in order:
+ *   1. `tool_name(…balanced parens…)` or `tool_name{…balanced braces…}`
+ *   2. a bare `tool_name` alone on its line (no opener — gemma4 case)
+ *   3. any line that holds two or more recognized tool-arg keys (kind:, dice:,
+ *      target_combatant_id:, …) — catches truncated/malformed tool calls
  * then collapse the run of blank lines this leaves behind.
  */
 export function stripToolCallSyntax(input: string): string {
   const nameAlt = TOOL_NAMES.join('|');
 
   let out = input;
-  const openRe = new RegExp(`\\b(?:${nameAlt})\\s*\\(`, 'g');
+  // Match either `tool_name(` or `tool_name{`, then walk forward tracking
+  // depth on the matching closer. Handles both forms in a single pass.
+  const openRe = new RegExp(`\\b(?:${nameAlt})\\s*[({]`, 'g');
   const ranges: Array<[number, number]> = [];
   let m: RegExpExecArray | null = openRe.exec(out);
   while (m !== null) {
+    const opener = out[m.index + m[0].length - 1];
+    const closer = opener === '(' ? ')' : '}';
     let depth = 1;
     let j = m.index + m[0].length;
     while (j < out.length && depth > 0) {
       const ch = out[j];
-      if (ch === '(') depth++;
-      else if (ch === ')') depth--;
+      if (ch === opener) depth++;
+      else if (ch === closer) depth--;
       j++;
     }
-    if (depth === 0) ranges.push([m.index, j]);
+    if (depth === 0) {
+      ranges.push([m.index, j]);
+    } else {
+      // Unbalanced (model truncated mid-args): strip to end of line so the
+      // partial blob doesn't leak into the chat.
+      const eol = out.indexOf('\n', m.index);
+      ranges.push([m.index, eol === -1 ? out.length : eol]);
+    }
     m = openRe.exec(out);
   }
   for (let i = ranges.length - 1; i >= 0; i--) {
@@ -64,6 +99,32 @@ export function stripToolCallSyntax(input: string): string {
 
   const bareRe = new RegExp(`(^|\\n)[ \\t]*(?:${nameAlt})[ \\t]*(?=\\n|$)`, 'g');
   out = out.replace(bareRe, (_match, p1: string) => p1 ?? '');
+
+  // JSON blob filter. Catches model output like
+  //   {"kind": "attack", "label": "…", "target_combatant_id": "npc-…"}
+  // dumped in prose. We strip any `{…}` block (no nested braces) that holds a
+  // quoted tool-arg key. Quoted keys are the unambiguous signal that this is a
+  // tool call payload, not natural French prose.
+  const jsonBlobRe = new RegExp(
+    `\\{[^{}]*["'](?:${TOOL_ARG_KEYS.join('|')})["']\\s*:[^{}]*\\}`,
+    'g',
+  );
+  out = out.replace(jsonBlobRe, '');
+
+  // Orphan KV-line filter. Catches the unquoted form (gemma4 case):
+  //   1d20+5,kind:attack,target_combatant_id:npc-…
+  // A line containing two or more tool-arg keys (with optional surrounding
+  // quotes) is almost certainly a stripped or never-prefixed tool call — drop
+  // the whole line. Threshold of 2 avoids false positives on legitimate prose
+  // like "label: une porte".
+  const argKeyRe = new RegExp(`["']?\\b(?:${TOOL_ARG_KEYS.join('|')})\\b["']?\\s*:`, 'g');
+  out = out
+    .split(/\r?\n/)
+    .filter((line) => {
+      const matches = line.match(argKeyRe);
+      return !matches || matches.length < 2;
+    })
+    .join('\n');
 
   return out.replace(/\n{3,}/g, '\n\n').trim();
 }

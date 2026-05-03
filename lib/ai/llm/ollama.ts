@@ -123,11 +123,7 @@ export function parseOllamaResponse(data: OllamaChatResponse): ChatResponse {
   // Ollama's `done_reason` so callers can detect truncation (length) instead of
   // mistaking a cut-off response for a completed turn.
   const stopReason: ChatResponse['stopReason'] =
-    toolCalls.length > 0
-      ? 'tool_use'
-      : data.done_reason === 'length'
-        ? 'max_tokens'
-        : 'end_turn';
+    toolCalls.length > 0 ? 'tool_use' : data.done_reason === 'length' ? 'max_tokens' : 'end_turn';
   return { text, toolCalls, stopReason };
 }
 
