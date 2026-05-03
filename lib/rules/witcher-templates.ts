@@ -243,14 +243,14 @@ export const GERALT_TEMPLATE: WitcherCharacterTemplate = createTemplate({
   ],
 });
 
-// Jaskier - Barde (Niveau 4)
+// Jaskier (Dandelion) - Barde humain, vicomte de Lettenhove (Niveau 4)
 export const JASKIER_TEMPLATE: WitcherCharacterTemplate = createTemplate({
   id: 'jaskier',
   name: 'Jaskier',
   description:
-    'Barde charismatique, poete et musicien, connu pour ses ballades et son sens aigu de la politique.',
-  species: 'halfling',
-  class: 'Barde',
+    'Barde charismatique, poète et musicien humain, vicomte de Lettenhove. Connu pour ses ballades sur Geralt et son flair politique.',
+  species: 'human',
+  class: 'bard',
   subclass: null,
   level: 4,
   baseAbilities: {

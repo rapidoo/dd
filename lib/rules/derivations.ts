@@ -1,12 +1,15 @@
+import type { Universe } from '../db/types';
 import { getAbilityModifier } from './abilities';
 import { calculateAC } from './armorClass';
 import { calculateMaxHP } from './hitPoints';
 import { proficiencyBonus } from './proficiency';
 import { spellAttackBonus, spellSaveDC, spellSlotsFor } from './spellcasting';
-import { CLASSES, SPECIES } from './srd';
+import { getClassesForUniverse, getSpeciesForUniverse } from './srd';
 import type { AbilityScores, SpellSlots } from './types';
 
 export interface CharacterDraftInput {
+  /** Universe drives which CLASSES/SPECIES dict to use. Defaults to dnd5e. */
+  universe?: Universe;
   classId: string;
   speciesId: string;
   level: number;
@@ -36,8 +39,12 @@ export interface DerivedStats {
  * Apply species bonuses to a set of base ability scores.
  * Each score is clamped to [1,30] to stay within D&D 5e rules.
  */
-export function applySpeciesBonuses(base: AbilityScores, speciesId: string): AbilityScores {
-  const species = SPECIES[speciesId];
+export function applySpeciesBonuses(
+  base: AbilityScores,
+  speciesId: string,
+  universe: Universe = 'dnd5e',
+): AbilityScores {
+  const species = getSpeciesForUniverse(universe)[speciesId];
   if (!species) throw new Error(`Unknown species: ${speciesId}`);
   const next = { ...base };
   for (const [ability, bonus] of Object.entries(species.abilityBonuses)) {
@@ -51,12 +58,13 @@ export function applySpeciesBonuses(base: AbilityScores, speciesId: string): Abi
  * Compute every derived stat the server must own. Client must never recompute these.
  */
 export function deriveCharacter(input: CharacterDraftInput): DerivedStats {
-  const classData = CLASSES[input.classId];
+  const universe = input.universe ?? 'dnd5e';
+  const classData = getClassesForUniverse(universe)[input.classId];
   if (!classData) throw new Error(`Unknown class: ${input.classId}`);
-  const species = SPECIES[input.speciesId];
+  const species = getSpeciesForUniverse(universe)[input.speciesId];
   if (!species) throw new Error(`Unknown species: ${input.speciesId}`);
 
-  const abilityScores = applySpeciesBonuses(input.abilityScores, input.speciesId);
+  const abilityScores = applySpeciesBonuses(input.abilityScores, input.speciesId, universe);
   const conMod = getAbilityModifier(abilityScores.con);
   const dexMod = getAbilityModifier(abilityScores.dex);
   const wisMod = getAbilityModifier(abilityScores.wis);

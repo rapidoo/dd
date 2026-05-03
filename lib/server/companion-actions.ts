@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { respondAsCompanion } from '../ai/companion-agent';
 import { executeRoll, renderCombatBlock } from '../ai/gm-agent';
 import { createSupabaseServerClient, createSupabaseServiceClient } from '../db/server';
-import type { CharacterRow, MessageRow } from '../db/types';
+import type { CharacterRow, MessageRow, Universe } from '../db/types';
 import { requireUser } from './auth';
 import { getActiveCombatState } from './combat-loop';
 
@@ -34,10 +34,17 @@ export async function promptCompanion(input: {
   // RLS verifies the current user owns the session's campaign.
   const { data: session } = await supabase
     .from('sessions')
-    .select('id')
+    .select('id, campaign_id')
     .eq('id', parsed.data.sessionId)
     .maybeSingle();
   if (!session) return { ok: false, error: 'Session introuvable' };
+
+  // Universe is needed to flavor the companion's tone (Witcher / Naheulbeuk / D&D).
+  const { data: campaign } = await supabase
+    .from('campaigns')
+    .select('universe')
+    .eq('id', session.campaign_id)
+    .maybeSingle<{ universe: Universe | null }>();
 
   // Companion data + full history fetched with service role to keep the
   // companion agent self-contained (bypasses RLS for read-only lookup).
@@ -47,7 +54,7 @@ export async function promptCompanion(input: {
     .select('*')
     .eq('id', parsed.data.characterId)
     .maybeSingle();
-  if (!character || !character.is_ai) {
+  if (!character?.is_ai) {
     return { ok: false, error: 'Compagnon introuvable' };
   }
   const { data: history } = await admin
@@ -65,6 +72,7 @@ export async function promptCompanion(input: {
       hint: parsed.data.hint,
       combatState,
       combatBlock: renderCombatBlock(combatState),
+      universe: campaign?.universe ?? null,
       executeRoll,
     });
     return { ok: true, characterName: character.name, content: turn.text };

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 
 export interface MessageProps {
   author: {
-    kind: 'gm' | 'user' | 'companion' | 'system';
+    kind: 'gm' | 'user' | 'companion' | 'npc' | 'system';
     name: string;
     color?: string;
     glyph?: string;

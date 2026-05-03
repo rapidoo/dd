@@ -303,6 +303,14 @@ export const WITCHER_SPECIES: Record<string, SpeciesData> = {
     baseSpeed: 7.5,
     abilityBonuses: { dex: 2, cha: 1 },
   },
+  // Vampires supérieurs (Régis, Detlaff). Rares mais canoniques —
+  // intelligence et charisme exceptionnels, vision nocturne, régénération.
+  vampire: {
+    id: 'vampire',
+    name: 'Vampire supérieur',
+    baseSpeed: 9,
+    abilityBonuses: { int: 2, cha: 2, con: 1 },
+  },
 };
 
 // Classes available in The Witcher universe (adapted roles)
@@ -411,6 +419,27 @@ export const WITCHER_CLASSES: Record<string, ClassData> = {
       'insight',
       'survival',
       'perception',
+    ],
+  },
+  // Bardes du Continent — troubadours, espions, conteurs (Jaskier, Priscilla).
+  // Pas magiciens : ils manient le verbe et la lame, pas les sorts.
+  bard: {
+    id: 'bard',
+    name: 'Barde',
+    hitDie: 'd8',
+    primaryAbility: ['cha', 'dex'],
+    casterType: 'none',
+    savingThrowProficiencies: ['dex', 'cha'],
+    skillChoices: 4,
+    skillList: [
+      'persuasion',
+      'deception',
+      'performance',
+      'history',
+      'stealth',
+      'insight',
+      'investigation',
+      'sleightOfHand',
     ],
   },
 };

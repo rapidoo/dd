@@ -1,149 +1,145 @@
-# DetD — Donjons & Dragons 5e avec agents IA
+# DetD — JDR solo avec MJ et compagnons IA
 
-Plateforme web permettant de jouer à Donjons & Dragons 5e en solo avec un MJ IA
-(Claude Opus 4.7) et 0-5 compagnons IA (Claude Sonnet 4.5).
+Plateforme web pour jouer en solo à un JDR narratif avec un **MJ IA** et **0–5
+compagnons IA**. Trois univers pris en charge : **Donjons & Dragons 5e**,
+**The Witcher** et **Le Donjon de Naheulbeuk**.
 
 ## Stack
 
 - **Front** : Next.js 16 (App Router) · React 19 · TypeScript strict · Tailwind v4
-- **Back** : Next.js Server Actions · Route Handlers (SSE)
-- **Data** : Supabase Postgres (état transactionnel, RLS) · Neo4j AuraDB (mémoire de campagne — entités, sessions, faits narratifs)
-- **LLM** : abstraction multi-provider (`lib/ai/llm/`) — **Anthropic** (stable), **Mistral** (nouveau), ou **Ollama / Gemma 4** (expérimental, dev-only)
+- **Back** : Server Actions · Route Handlers (SSE)
+- **Data** : Supabase Postgres (état transactionnel, RLS) · Neo4j AuraDB (mémoire de campagne — entités, sessions, faits)
+- **LLM** : abstraction multi-provider (`lib/ai/llm/`) — **Anthropic** (prod), **Mistral**, ou **Ollama / Gemma 4** (dev-only)
 - **Validation** : Zod · **Tests** : Vitest · **Lint** : Biome
 
 Voir `spec.md` pour l'architecture complète et `dnd5e_rules.md` pour les règles.
 
-## Providers LLM
+## Architecture — IA spécialisées + machine à états serveur
 
-Le switch `LLM_PROVIDER` (env) choisit le backend :
+L'orchestration ne repose plus sur un mégacontrôleur "Conteur omniscient". Le
+serveur tient une machine à états turn-by-turn (`lib/server/turn-orchestrator.ts`)
+qui dispatche à trois IA scopées :
 
-### Anthropic — **mode stable, utilisé en prod**
-| Rôle | Modèle | Usage |
-|---|---|---|
-| BUILDER | `claude-haiku-4-5` | Création de PJ/compagnons (noms, personnalités) |
-| **GM** | `claude-opus-4-7` | Narration MJ (seul rôle sur Opus — richesse stylistique visible au joueur) |
-| COMPANION | `claude-haiku-4-5` | Voix des compagnons IA |
-| UTIL | `claude-haiku-4-5` | Concierge (entités + butin) + résumé roulant |
-
-### Mistral — **nouveau provider, configuration simple**
-
-Provider alternatif utilisant l'API Mistral. Configuration requise dans `.env.local`:
-
-```bash
-LLM_PROVIDER=mistral
-MISTRAL_API_KEY=votre_clé_api
-# MISTRAL_BASE_URL=https://api.mistral.ai (optionnel, par défaut)
-```
-
-| Rôle | Modèle par défaut | Usage |
-|---|---|---|
-| BUILDER | `mistral-large-2407` | Création de PJ/compagnons |
-| **GM** | `mistral-large-2407` | Narration MJ |
-| COMPANION | `mistral-small-2402` | Voix des compagnons IA |
-| UTIL | `mistral-small-2402` | Concierge + résumé roulant |
-
-### Ollama (Gemma 4) — **⚠️ en cours de stabilisation, non production-ready**
-
-Mode local gratuit utilisant uniquement la famille **gemma4**. Utile pour tester
-sans consommer la facture Anthropic, mais la qualité narrative, la fiabilité
-des tool-calls et la tolérance aux formats JSON restent en cours d'évaluation.
-**Ne pas utiliser en prod Vercel** — l'URL localhost n'est pas joignable depuis
-le déploiement.
-
-| Rôle | Modèle | Taille | Notes |
+| Rôle | Module | Modèle (Anthropic) | Quand |
 |---|---|---|---|
-| BUILDER | `gemma4:e4b` | 9.6 GB | Réponses courtes (noms, persona) — pas besoin de raisonnement |
-| GM | `gemma4:26b` | 18 GB | Modèle de raisonnement — `think:false` envoyé par défaut |
-| COMPANION | `gemma4:26b` | 18 GB | Même modèle que GM (évite un rechargement en RAM) |
-| UTIL | `gemma4:e4b` | 9.6 GB | Concierge + résumé roulant |
+| **Narrateur** | `lib/ai/gm-agent.ts` | Opus 4.7 | Hors combat + résolution de l'action du PJ en combat |
+| **NPC** | `lib/ai/npc-agent.ts` | Haiku 4.5 | Tour d'un PNJ pendant un combat (cible un ennemi vivant, lance un jet, passe la main) |
+| **Compagnon** | `lib/ai/companion-agent.ts` | Haiku 4.5 | Interactions narratives + tour automatique en combat |
 
-Setup local :
-```bash
-ollama serve
-ollama pull gemma4:e4b gemma4:26b
-# .env.local :
-LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://localhost:11434   # défaut, optionnel
-# (ANTHROPIC_API_KEY devient optionnelle dans ce mode)
-pnpm dev
-```
+Une seule connexion SSE par input joueur ; l'orchestrateur enchaîne les tours
+côté serveur et signale les changements d'auteur via les events `turn_start` /
+`turn_end` que le client traduit en bulles distinctes.
 
-Override par rôle (utile pour benchmarker un autre tag gemma4) :
-```bash
-LLM_MODEL_BUILDER=gemma4:31b   # si vous voulez la qualité maxi pour la création
-LLM_MODEL_GM=gemma4:e4b        # plus rapide, qualité narrative moindre
-LLM_MODEL_COMPANION=gemma4:26b
-LLM_MODEL_UTIL=gemma4:e4b
-```
+Le **combat** est serveur-autoritaire (`lib/server/combat-loop.ts`) : initiative,
+curseur, fin auto, optimistic CAS sur la version du `combat_encounters`.
 
-Limites connues du mode Ollama :
-- **Modèles de raisonnement gemma4:26b/:31b** : ils émettent ~150 tokens de
-  pensée cachée avant la réponse visible. L'adaptateur envoie automatiquement
-  `think: false` (silencieusement ignoré sur les modèles non-raisonnement comme
-  e4b) ; sinon les courts `maxTokens` budgétés par les Server Actions
-  (ex. `suggestName` à 40) renvoient une réponse vide.
-- Les tool-calls dépendent du support du modèle (erreur typée
-  `model_no_tool_support` si un tag gemma4 ne le gère pas) — e4b, 26b et 31b
-  sont vérifiés tool-capable.
-- Le concierge utilise `format: 'json'` pour forcer un JSON propre ; les
-  échecs éventuels sont loggés côté serveur (`[concierge] no_json` /
-  `schema_invalid` / …) — surveillez la console `pnpm dev`.
-- Les modèles tournent en non-streaming (contrairement au streaming SSE
-  d'Anthropic) ; la narration apparaît en un bloc à la fin du tour.
-- Une réponse tronquée (budget `maxTokens` atteint) est désormais remontée
-  via `stopReason: 'max_tokens'` — utile pour distinguer une vraie réponse
-  vide d'une coupure.
+## Onboarding personnage (tirage de dés)
+
+Création de PJ et de compagnons unifiée autour d'une **section de tirage**
+bloquante :
+
+- **Modèles canoniques** par univers (Geralt, Jaskier, Yennefer pour Witcher ;
+  La Compagnie de Naheulbeuk au complet ; archétypes pour D&D) — pré-remplissent
+  nom, espèce, classe, caractéristiques, compétences, historique, personnalité.
+- **Or de départ** : formule par classe (PHB pour D&D, équivalents thématiques
+  pour Witcher/Naheulbeuk). **Un seul tirage**, animation des dés, pas de
+  relance — submit du formulaire bloqué tant que les dés ne sont pas lancés.
+- **Équipement de base** : kit déterministe par classe et univers (catalogue
+  dans `lib/rules/equipment.ts`).
+- **Sorts de départ** : liste par classe lanceuse uniquement
+  (`lib/rules/spells.ts`). Les non-lanceurs (Jaskier en Barde witcher, paladin
+  niv. 1, etc.) n'ont pas de sorts.
+- L'**univers est forcé** à celui de la campagne — pas de mismatch possible.
+
+À la persistance, les items du kit sont normalisés en `InventoryItem` canonique
+(id unique, qty, weapon-block parsé) — voir `lib/server/inventory-normalize.ts`.
+
+## Univers pris en charge
+
+### Donjons & Dragons 5e (SRD 5.1)
+
+Système par défaut. Règles complètes (jets, combat, sorts, repos, conditions,
+sauvegardes de mort, repos courts/longs).
+
+Templates : Le Paladin · L'Archère · La Mage · Le Clerc · La Voleuse · Le Barbare.
+
+### The Witcher
+
+Univers du Continent. Sorceleurs, mages, alchimistes ; signes (Igni, Aard,
+Yrden, Quen, Axii) traités comme cantrips ; armes argent/acier ; potions.
+
+- **Espèces** : Humain, Elfe, Nain, Demi-Elfe, Halfelin, Vampire supérieur (Régis)
+- **Classes** : Sorceleur, Mage, Voleur, Éclaireur, Guerrier, Alchimiste, Barde
+- **Templates** : Geralt de Riv · Jaskier · Yennefer de Vengerberg · Zoltan Chivay · Emiel Regis Rohellec Terzieff-Godefroy
+- **Modules pré-configurés** : Contrat du Village Maudit · Héritage de la Sorcière · Malédiction du Bois de Brokilon · Tournoi de la Lame Noire
+
+### Le Donjon de Naheulbeuk
+
+Terre de Fangh, ton humoristique. Compagnie d'aventuriers complète au début de
+session.
+
+- **Espèces** : Humain, Nain, Elfe, Demi-Elfe, Ogre, Orc, Gobelin, Halfelin, Troll, Demi-Démon, Houchou
+- **Classes** : Ranger, Voleur, Magicien, Guerrier, Barbare, Paladin, Barde, Prêtre
+- **Templates** : Le Ranger · Le Voleur · La Magicienne · Le Nain · L'Elfe · L'Ogre · Le Barbare · La Prêtresse de Thô · Théo de Reuk · Belzébith · Reivax
+
+## Auto-intro et règles narratives
+
+- **Ouverture automatique** : à l'arrivée sur une session vide, le Conteur
+  ouvre l'aventure tout seul (décor, party présentée à partir des fiches,
+  hook narratif, "Que fais-tu ?"). Aucun input requis.
+- **Mode combat visuel** : la chat et l'input passent en thème "blood" pendant
+  un combat actif (radial-gradient rouge, badge ⚔ ROUND N).
+- **Argent vs objets** : tout argent trouvé est crédité automatiquement par le
+  concierge ; pour un objet, le narrateur **demande l'intention** au joueur
+  avant de mettre à jour l'inventaire.
 
 ## Démarrer en local
 
 ```bash
 pnpm install
-cp .env.local.example .env.local   # puis remplir les 7 variables
-pnpm supabase db push              # ou copier les .sql dans SQL Editor
+cp .env.local.example .env.local   # remplir les 7 variables
+pnpm supabase db push              # ou copier supabase/bootstrap.sql dans SQL Editor
 pnpm dev
 ```
 
-## Workflows vérifiés
+## Providers LLM
 
-| Sprint | Livrable |
+`LLM_PROVIDER=anthropic|mistral|ollama` (défaut `anthropic`).
+
+### Anthropic — prod
+| Rôle | Modèle |
 |---|---|
-| 0 | Bootstrap Next.js + Tailwind + Biome + Vitest + CI GitHub Actions |
-| 1 | `/lib/rules` — 16 modules purs, 226 tests, 97.5% coverage |
-| 2 | Schéma Postgres + RLS + Auth magic link |
-| 3 | Design system (tokens du design `session.html`) |
-| 4 | Foyer (dashboard, création campagne, profil) |
-| 5 | Création de personnage avec dérivations serveur |
-| 6 | Session narrative + streaming SSE avec Opus GM |
-| 7 | Compagnons Sonnet autour du feu |
-| 8 | Combat narratif théâtre de l'esprit |
-| 9 | Fiche de personnage + contrôles HP |
-| 10 | Repos court et long |
-| 11 | Mémoire Neo4j + journal |
-| 12 | Polish + docs |
-| 13 | **Support The Witcher** — univers alternatif avec races, classes, modules et mécaniques uniques (signes, alchimie, faiblesses des monstres, moralité grise) |
+| BUILDER (persona-suggest) | `claude-haiku-4-5` |
+| **NARRATOR** (Conteur) | `claude-opus-4-7` |
+| COMPANION | `claude-haiku-4-5` |
+| NPC | `claude-haiku-4-5` |
+| UTIL (concierge, résumé) | `claude-haiku-4-5` |
 
-## Univers pris en charge
+### Mistral
+```bash
+LLM_PROVIDER=mistral
+MISTRAL_API_KEY=...
+```
+NARRATOR sur `mistral-large-2407`, autres rôles sur `mistral-small-2402`.
 
-### Donjons & Dragons 5e (SRD 5.1)
-Le système par défaut, pleinement implémenté avec règles complètes (jets, combat, sorts, repos, etc.).
+### Ollama / Gemma 4 — dev-only
 
-### The Witcher — **nouveau**
+Mode local utilisant la famille `gemma4`. Fiabilité tool-calls et JSON
+variables — **non production-ready**, l'URL localhost n'est pas joignable
+depuis Vercel.
 
-Support complet pour l'univers de The Witcher avec :
+```bash
+ollama serve
+ollama pull gemma4:e2b gemma4:26b
+LLM_PROVIDER=ollama
+```
 
-- **5 races** : Humain, Elfe, Nain, Demi-Elfe, Halfelin
-- **6 classes** : Sorceleur, Mage, Voleur, Éclaireur, Guerrier, Alchimiste
-- **4 modules pré-configurés** :
-  - Le Contrat du Village Maudit (Niv. 1-2)
-  - L'Héritage de la Sorcière (Niv. 2-3)
-  - La Malédiction du Bois de Brokilon (Niv. 3-4)
-  - Le Tournoi de la Lame Noire (Niv. 4-6)
-- **Système de signes** (Igni, Aard, Quen, Yrden, Axii) — *à venir*
-- **Alchimie** (potions, ingrédients, risques) — *à venir*
-- **Faiblesses des monstres** (multiplicateurs de dégâts) — *à venir*
-- **Moralité grise et réputation** — *à venir*
-
-La sélection de l'univers se fait lors de la création de campagne. Toutes les données (races, classes, modules) sont automatiquement filtrées selon l'univers choisi.
+| Rôle | Modèle | Notes |
+|---|---|---|
+| BUILDER | `gemma4:31b` | Réponses courtes |
+| NARRATOR | `gemma4:26b` | `think:false` envoyé pour tronquer la pensée cachée |
+| COMPANION/NPC | `gemma4:26b` | Même modèle évite un rechargement RAM |
+| UTIL | `gemma4:e2b` | Concierge + résumé |
 
 ## Commandes
 
@@ -151,105 +147,68 @@ La sélection de l'univers se fait lors de la création de campagne. Toutes les 
 pnpm lint          # biome check
 pnpm lint:fix      # biome check --write
 pnpm typecheck     # tsc --noEmit
-pnpm test          # vitest run
+pnpm test          # vitest run (376 tests)
 pnpm test:coverage # vitest avec coverage v8
-pnpm test:watch    # vitest watch
+pnpm test:watch
 pnpm build         # next build
-pnpm dev           # next dev
+pnpm dev
 ```
 
 ## Règles d'or (voir `CLAUDE.md`)
 
-- Toute logique de règles vit côté **serveur** (`/lib/rules`).
+- Logique de règles **server-only** (`/lib/rules`, ≥ 90 % coverage).
 - Toute mutation passe par une Server Action Zod-validée.
-- Les clés API (Anthropic, Supabase service role, Neo4j) ne quittent jamais le serveur.
-- `pnpm test` doit rester vert. Objectif 90%+ de couverture sur `/lib/rules`.
+- Clés API (Anthropic, Supabase service role, Neo4j) jamais côté client.
+- Tenant-guard chaque écriture service-role consommant une sortie LLM.
 
 ## Arborescence
 
 ```
-app/                    pages Next.js (App Router)
-├─ api/sessions/[id]/stream  route SSE — flux du MJ
-├─ auth/callback             magic link exchange
+app/
+├─ api/sessions/[id]/stream         route SSE — orchestrateur multi-tours
 ├─ campaigns/
 │  ├─ [id]/
-│  │  ├─ characters/new      création de PJ
-│  │  ├─ journal             chronique + codex
-│  │  ├─ play                écran de session (chat + panneau)
-│  │  ├─ sheet               fiche + contrôles HP/repos
-│  │  └─ team                compagnons IA
-│  └─ new                    wizard de création de campagne
-├─ dashboard                 foyer
-└─ design                    catalogue du design system
+│  │  ├─ characters/new             création PJ (templates + tirage)
+│  │  ├─ play                       écran de session (chat + tracker combat)
+│  │  ├─ sheet                      fiche + contrôles HP/repos
+│  │  └─ team                       compagnons IA (création + tirage)
+│  └─ new                           wizard campagne (univers, monde, modules)
+└─ dashboard
 
-components/             UI partagé (dice overlay, sidebar, messages, stats)
 lib/
-├─ ai/                  agents Claude (GM, compagnons, tools)
-├─ db/                  Supabase SSR clients + types de ligne
-├─ neo4j/               driver + Cypher paramétrés
-├─ rules/               moteur D&D 5e pur (dice, combat, sorts, etc.)
-└─ server/              Server Actions (campaigns, sessions, combat, rest…)
-
-supabase/migrations/    SQL (schéma + RLS)
-tests/                  vitest unit + (à venir) Playwright e2e
+├─ ai/                              agents — narrator, NPC, companion + universe prompts
+├─ rules/                           moteur pur — dice, combat, equipment, spells, templates
+└─ server/                          orchestrator, combat-loop, server actions
 ```
 
 ## Conformité SRD D&D 5e
 
-`lib/rules/` implémente les règles SRD 5.1 en TypeScript pur (≥ 97 % de
-couverture). Audit détaillé contre `dnd5e_rules.md` :
+`lib/rules/` implémente le SRD 5.1 en TypeScript pur (97.5 % de couverture).
 
 ### Implémenté
 
-- Jets de d20 avec avantage/désavantage (annulation correcte, pas de stacking)
-- Critiques : dés d'arme doublés, modificateurs non doublés
-- 18 compétences mappées sur leur carac. + **Expertise** (maîtrise doublée) + scores passifs
-- Bonus de maîtrise par niveau (+2 → +6)
-- CA avec caps DEX, STR min, désavantage discrétion, bouclier +2
-- Sauvegardes de mort complètes : 3 succès = stabilisé · 3 échecs = mort ·
-  nat 20 = reprise à 1 PV · nat 1 = 2 échecs
-- 14 conditions officielles + échelle d'épuisement 6 niveaux
-- Emplacements de sorts (lanceurs complets + partiels, tables 1-20 verbatim)
-- DD de sauvegarde sort, bonus d'attaque sort, concentration (DD `max(10, dmg/2)`)
-- Repos court (dépense de DV) / long (PV + slots + exhaustion −1 si nourri)
-- XP + ASI aux niveaux 4/8/12/16/19
-- Turn economy : 1 action / 1 bonus / 1 réaction / mouvement / interactions libres
+- Jets de d20 avec avantage/désavantage · critiques · expertise · scores passifs
+- Bonus de maîtrise par niveau · CA avec caps DEX · sauvegardes de mort complètes
+- 14 conditions + échelle d'épuisement · emplacements de sorts (full + partiel)
+- DD de sauvegarde sort · bonus d'attaque sort · concentration · upcast pour `goodberry`
+- Repos court (DV) / long · XP + ASI aux niveaux 4/8/12/16/19
+- Turn economy : action / bonus / réaction / mouvement
 
-### Manques à fort impact narratif
+### Manques à fort impact
 
-| Règle SRD | État | Conséquence en jeu |
+| Règle | État | Conséquence |
 |---|---|---|
-| Attaques d'opportunité | ❌ absent | Un joueur fuit un combat sans conséquence ; "désengager" perd son sens |
-| Couverture (+2 / +5 / totale) | ❌ absent | Le MJ décrit "tu te caches derrière le muret" mais la CA ne bouge pas |
-| Stabilisation via Médecine DD 10 | ❌ absent | Pas de soin manuel d'un PJ tombé — seuls les sorts guérisseurs fonctionnent |
-| Upcast (sort à niveau supérieur) | ❌ absent | Impossible de représenter "Boule de feu en niv. 5 = +2d6" |
-| Rituels | ❌ absent | Sorts utilitaires lents (Détection, Communication) impossibles hors slot |
+| Attaques d'opportunité | ❌ | Fuir un combat sans coût |
+| Couverture (+2 / +5 / totale) | ❌ | "Tu te caches derrière le muret" sans bonus CA |
+| Stabilisation via Médecine DD 10 | ❌ | Pas de soin manuel d'un PJ tombé |
+| Upcast complet (boule de feu niv. 5+) | ❌ | Sort fixé au niveau d'apprentissage |
+| Rituels | ❌ | Pas de Détection lente hors slot |
 
-### Manques à impact moyen
+## Prochaines étapes
 
-| Règle | État | Détail |
-|---|---|---|
-| Propriétés d'armes | 🟡 partiel | `weapon-attack.ts` gère `finesse` + `ranged`. Manquent : `versatile` (1d8→1d10 à 2 mains), `heavy`, `reach`, `thrown`, `two-handed`, `loading`, `ammunition` |
-| Point-buy 8–15 | ❌ absent | Le wizard accepte des scores bruts, sans validation du budget 27 points |
-| Table de rencontres (XP par CR) | ❌ absent | Pas bloquant en solo narratif, empêche tout calibrage auto de difficulté |
-
-## Prochaines étapes (v0.2+)
-
-- **Combler les manques SRD prioritaires** : attaques d'opportunité, couverture, upcast, stabilisation Médecine DD 10 (~250 lignes + tests, débloque 4 motifs narratifs déjà tentés par le MJ)
-- Stabiliser le mode Ollama (fiabilité tool-calls, JSON concierge, streaming)
-- Onboarding guidé complet (campagne → pitch → PJ → première session)
-- Génération d'images (scènes / portraits) — Replicate / fal.ai
-- Sous-vues Sorts et Sac (actuellement agrégées dans la fiche)
-- Propriétés d'armes complètes (versatile, heavy, reach, thrown, two-handed)
-- Point-buy 8–15 sur le wizard de création de PJ
+- Combler les manques SRD prioritaires (AoO, couverture, upcast, stabilisation)
+- Picker de sorts (au-delà du starter set par classe)
+- Stabiliser Ollama (tool-calls, JSON, streaming)
+- Génération d'images (Replicate / fal.ai)
 - Playwright e2e sur les parcours critiques
 - Déploiement Vercel + preview URL
-
-### The Witcher — Roadmap
-- [ ] **Modèles de personnages** : Geralt (Sorceleur 5), Jaskier (Barde 4), Yennefer (Mage 5), Zoltan (Guerrier 4), Regis (Alchimiste Vampire 5)
-- [ ] Implémentation complète des **12 races** et **10 classes** de l'univers
-- [ ] Système de **signes** avec gestion des emplacements et coûts
-- [ ] Système d'**alchimie** (potions, bombes, huiles)
-- [ ] **Faiblesses des monstres** avec multiplicateurs de dégâts automatiques
-- [ ] **Système de réputation** et moralité grise
-- [ ] 6 modules supplémentaires pour couvrir les niveaux 1-10

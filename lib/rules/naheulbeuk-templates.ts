@@ -602,6 +602,63 @@ export const REIVAX_TEMPLATE: NaheulbeukCharacterTemplate = createTemplate({
   patron: 'Mankdebol, dieu de la Loose',
 });
 
+// La Prêtresse — clerc de la déesse Thô, fervente, intransigeante,
+// supporte mal les blagues sur la déesse. Septième membre canonique de la Compagnie.
+export const PRETRESSE_TEMPLATE: NaheulbeukCharacterTemplate = createTemplate({
+  id: 'la-pretresse',
+  name: 'La Prêtresse',
+  description:
+    'Clerc fervente de la déesse Thô. Soigne ses compagnons, exorcise des fois, prie beaucoup et n’aime PAS qu’on touche à sa déesse.',
+  species: 'human',
+  class: 'cleric',
+  subclass: 'Domaine de Thô',
+  level: 3,
+  baseAbilities: { str: 12, dex: 10, con: 13, int: 11, wis: 16, cha: 14 },
+  abilities: { str: 13, dex: 11, con: 14, int: 12, wis: 17, cha: 15 },
+  max_hp: 24,
+  current_hp: 24,
+  ac: 16,
+  speed: 9,
+  proficiencies: ['religion', 'medicine', 'insight', 'persuasion'],
+  skills: { religion: 6, medicine: 5, insight: 5, persuasion: 4 },
+  features: [
+    {
+      name: 'Soin sacré',
+      description: '1d8 + Mod.Sag PV au toucher. 3/jour.',
+    },
+    {
+      name: 'Canalisation divine de Thô',
+      description:
+        '1/repos court : repousse les morts-vivants et démons mineurs sur 9 m (DD 13 Sag).',
+    },
+    {
+      name: 'Inflexible Thô',
+      description:
+        'Avantage aux JdS contre charme, peur et tentation. Désavantage aux Tromperie quand Thô est moquée.',
+    },
+    {
+      name: 'Sermon expéditif',
+      description:
+        '1/scène : prêche un sermon de 3 secondes. Cible alliée +1 attaque, ennemis indifférents (Sag DD 13 sinon ignorent l’effet).',
+    },
+  ],
+  inventory: [
+    { name: 'Masse d’armes bénie', type: 'arme', damage: '1d6+1' },
+    { name: 'Bouclier au symbole de Thô', type: 'armure', description: '+2 CA' },
+    { name: 'Cotte de mailles', type: 'armure', description: 'CA 16' },
+    { name: 'Symbole sacré de Thô', type: 'objet' },
+    { name: 'Encens et eau bénite', type: 'consommable', count: 3 },
+    {
+      name: 'Manuel de la déesse Thô',
+      type: 'objet',
+      description: 'Tome canonique. Sermons, soins, anathèmes.',
+    },
+  ],
+  tic: '« Que Thô te guide, mécréant ! »',
+  juron: 'Par les yeux saints de Thô !',
+  patron: 'Thô, déesse de la Justice',
+});
+
 export const NAHEULBEUK_TEMPLATES: Record<string, NaheulbeukCharacterTemplate> = {
   ranger: RANGER_TEMPLATE,
   voleur: VOLEUR_TEMPLATE,
@@ -610,6 +667,7 @@ export const NAHEULBEUK_TEMPLATES: Record<string, NaheulbeukCharacterTemplate> =
   elfe: ELFE_TEMPLATE,
   ogre: OGRE_TEMPLATE,
   barbare: BARBARE_TEMPLATE,
+  pretresse: PRETRESSE_TEMPLATE,
   theo: THEO_TEMPLATE,
   belzebith: BELZEBITH_TEMPLATE,
   reivax: REIVAX_TEMPLATE,

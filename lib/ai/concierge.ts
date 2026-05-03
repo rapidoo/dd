@@ -218,7 +218,7 @@ async function extract(
       messages: [
         {
           role: 'user',
-          content: `Tu es le concierge mécanique d'une partie de D&D 5e. Lis la narration finale du Conteur et extrais TROIS choses au format JSON :
+          content: `Tu es le concierge mécanique d'une partie de jeu de rôle. Lis la narration finale du Conteur et extrais TROIS choses au format JSON :
 
 1) "entities" — chaque fois qu'un PNJ, lieu, faction, objet NOMMÉ, quête ou événement notable est mentionné, cite-le. Tu DOIS lister même les entités déjà connues (le système dédoublonne côté graphe). Ignore seulement les foules anonymes ("des gardes", "une taverne sans nom").
 2) "facts" — propositions narratives apprises ou confirmées pendant ce tour. Attache chaque fait à une entité (about_entity_name doit matcher un name de "entities" ou d'une entité déjà en mémoire). Exemples : "Vaeloria se méfie des humains" (behavior) ; "Razmoo a juré de protéger Aldric" (promise) ; "Le Maître Gris est en réalité Malkron" (secret).
@@ -243,8 +243,10 @@ ${partyLines}
 Règles :
 - entities : sois généreux sur les noms propres, avare sur les génériques. Si un PNJ n'a qu'un surnom ("le cultiste"), ne le cite que s'il est distinct et récurrent.
 - facts : ne recopie pas la narration — résume en 1 phrase un fait durable (max 200 chars). Pas de "il a dit", "elle fait un geste" (événement d'un tour ≠ fait durable).
-- loot : uniquement un VRAI transfert (ramassé, donné, volé, acheté, dépensé). Pas les objets simplement décrits. Nombres en lettres → chiffres.
+- loot.currency : RÈGLE STRICTE — TOUTE pièce ou somme d'argent mentionnée comme étant trouvée, découverte, extraite, gagnée, donnée, volée, dépensée par un PJ ou compagnon est un transfert et DOIT être listée. Cela inclut les petites sommes ("une pièce de cuivre", "quelques sous", "trois pièces d'or"). Convertis les expressions narratives en deltas exacts (cp, sp, ep, gp, pp). Ne demande pas l'intention pour l'argent : trouvé = ramassé.
+- loot.items : UNIQUEMENT lorsque le PJ ou compagnon a CLAIREMENT décidé de prendre/garder l'objet (geste explicite, dialogue d'acceptation, le narrateur confirme la prise). Si un objet est seulement décrit, examiné, ou que le narrateur attend l'intention du joueur, NE LE LISTE PAS. Si le joueur a dit "je le prends / je le garde", c'est OK.
 - Pour une arme, weapon={damage_dice, damage_type, ability, ranged?} si les stats sont canoniques (dague 1d4/perforant/finesse, marteau 1d8/contondant/str, arc court 1d6/perforant/ranged).
+- Nombres en lettres → chiffres.
 - Max 12 entités, 12 faits, 12 loot ops.
 - Rien à persister ? Renvoie {"entities":[],"facts":[],"loot":[]}.
 

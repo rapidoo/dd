@@ -38,31 +38,38 @@ e2e quirks: `playwright.config.ts` boots its own `next dev` on port 3001 with `A
 
 ### Session turn lifecycle (the hot path)
 
-`/app/api/sessions/[id]/stream/route.ts` is the SSE endpoint. One GM turn flows:
+`/app/api/sessions/[id]/stream/route.ts` is the SSE endpoint. One player input opens a single SSE stream; the **server orchestrator** (`lib/server/turn-orchestrator.ts`) drives a state machine that may chain multiple turns inside that stream — narrator, NPCs, companions — until the cursor lands back on the PC or combat ends.
 
 1. **Auth + ownership check** — `supabase.auth.getUser()` then fetch `sessions.campaign_id` through RLS. A non-owner gets 404 (leaks nothing).
-2. **Rate limit** — `lib/server/rate-limit.ts` sliding window, 20 turns/min/user.
+2. **Rate limit** — `lib/server/rate-limit.ts` sliding window, 20 player inputs/min/user. Each input may produce many turns; the limit is on connections, not turns.
 3. **Debug shortcut** — `lib/ai/debug-mode.ts` intercepts `/debug <cmd>` messages in dev/preview only, skipping the LLM entirely for UI smoke tests.
-4. **`runGmTurn()` generator** (`lib/ai/gm-agent.ts`) — streams `GmEvent`s. Inside:
-   - `compactHistory()` from `rolling-summary.ts` keeps only the last 6 messages verbatim; older ones are replaced by a Haiku-generated summary stored in `sessions.summary` + `sessions.summary_cursor`. Regenerated every ~8 new messages.
-   - `listEntitiesForCampaign()` from Neo4j (source of truth for campaign memory) injects up to 6 known entities into the system prompt ("Mémoire" block), with the session numbers where each was seen.
-   - LLM tool-use loop (max 6 iterations) — the model emits `request_roll`, `apply_damage`, `start_combat`, `cast_spell`, `prompt_companion`, etc. Each tool has a Zod input schema validated before side-effects. **Note**: `next_turn` and `end_combat` no longer exist as tools — the server-authoritative combat loop handles them.
-   - `hasRollDelegation()` safeguard: if the GM writes "Fais un jet" / "Lance un dé" **without** calling `request_roll`, the turn is swallowed and the model is re-prompted. Same pattern is tested in `tests/unit/gm-roll-delegation.test.ts`.
+4. **`runTurnLoop()` generator** (`lib/server/turn-orchestrator.ts`) dispatches each turn to the right agent based on the current combat state:
+   - **NARRATIVE mode** (no active combat) → `runGmTurn()` (`lib/ai/gm-agent.ts`). Narrates, can call `start_combat` to enter combat.
+   - **COMBAT mode + cursor on PC** → if user just spoke, narrator resolves their action; otherwise loop returns and waits for input.
+   - **COMBAT mode + cursor on NPC** → `runNpcTurn()` (`lib/ai/npc-agent.ts`). Single-NPC scope, Haiku tier, picks a target and rolls.
+   - **COMBAT mode + cursor on companion** → `respondAsCompanion()` (`lib/ai/companion-agent.ts`) called directly (not via the GM tool).
+   - Each turn is bracketed by `turn_start` / `turn_end` events the route translates to SSE so the client renders distinct chat bubbles per author.
+   - Cap: `MAX_DEPTH=12` chained turns per player input (defensive; a normal combat round is well below).
+5. **Per-turn persistence** — the route handler accumulates each turn's deltas and writes one message row per turn at `turn_end`:
+   - Narrator → `author_kind='gm'`.
+   - NPC → `author_kind='character'`, `author_id=null`, `metadata.npc_name = …`.
+   - Companion → persisted by `respondAsCompanion` itself (`author_kind='character'`, `author_id=<uuid>`).
+6. **Fire-and-forget concierge** — `lib/ai/concierge.ts` reads the aggregated narration once everything settled, extracts entities → Neo4j and inventory/currency deltas → Postgres.
+
+Shared tool executors (`lib/ai/tool-executors.ts`) — `executeRoll`, `executePassTurn`, `executeApplyCondition` — are used by every agent so dice rolls, condition application, and turn advancement go through the same tenant-guarded paths.
 
 ### Combat loop (server-authoritative)
 
-`lib/server/combat-loop.ts` owns the encounter lifecycle. The LLM only declares NPC actions and rolls dice; the server handles turn advancement, KO skip, and end-of-combat detection.
+`lib/server/combat-loop.ts` owns the encounter lifecycle. Agents only declare actions and roll dice; the server handles turn advancement, KO skip, and end-of-combat detection.
 
 - `startEncounter` — rolls initiative for every PC/companion + provided NPCs, persists `combat_encounters` row with `participants_order` (kind-discriminated initiative list) and `npcs` JSONB. `version` int starts at 0 for optimistic CAS.
 - `advanceUntilNextActor` — increments `current_turn_index`, skipping participants at 0 PV; on a round wrap, ticks every participant's conditions (PCs in their `characters.conditions`, NPCs in the `npcs` JSONB). Auto-calls `endEncounter` when `checkAllNpcsDown(state)`.
 - `applyDamageToParticipant` — discriminates by `kind` from `participants_order`. NPCs mutate the `npcs` JSONB via `casUpdate` (reads version, increments, retries up to 3 times on conflict). PCs/companions write `characters.current_hp` directly — **no mirror in the encounter row**, `characters` is the source of truth.
 - `applyConditionToParticipant` — same routing for conditions.
 - `buildCombatState` — assembles the rich `CombatState` (round, currentTurnIndex, participants[]) by joining `npcs` JSONB with the `characters` rows for PC/companion entries. Emitted as the `combat_state` SSE event after every mutation; the client `<CombatTracker>` consumes it directly without refetching party rows.
-- `executeRoll` (gm-agent) auto-applies damage when `request_roll(kind=damage|heal, target_combatant_id=…)` is called, then triggers `advanceUntilNextActor` if it just downed an NPC.
+- `executeRoll` (`tool-executors.ts`) auto-applies damage when `request_roll(kind=damage|heal, target_combatant_id=…)` is called, then triggers `advanceUntilNextActor`.
 
-The two retired tools (`next_turn`, `end_combat`) are still in the sanitizer's `TOOL_NAMES` list so prose mentions are stripped from narration even if the model writes them.
-5. **Persist GM message** (Postgres `messages` table).
-6. **Fire-and-forget concierge** — `lib/ai/concierge.ts` reads the final narration via a second LLM call (with `jsonMode:true` on Ollama), extracts entities → Neo4j (with a stable UUID + `:APPEARS_IN` edge to the current `Session` node) and inventory/currency deltas → Postgres. Errors log via `console.warn('[concierge.*]')` in dev. **This is why Opus doesn't need `grant_item`/`adjust_currency` RÈGLE ABSOLUE anymore** — the janitor handles bookkeeping from prose. Campaign memory (`public.entities` Postgres table) has moved to Neo4j; the Postgres table is now DEPRECATED and no longer read or written.
+The two retired tools (`next_turn`, `end_combat`) are still in the sanitizer's `TOOL_NAMES` list so prose mentions are stripped from narration even if a model writes them.
 
 ### LLM provider abstraction (`lib/ai/llm/`)
 
@@ -76,15 +83,27 @@ The two retired tools (`next_turn`, `end_combat`) are still in the sanitizer's `
 | Role | Anthropic | Ollama |
 |---|---|---|
 | BUILDER (persona-suggest) | claude-haiku-4-5 | gemma4:31b |
-| GM (runGmTurn) | **claude-opus-4-7** | gemma4:26b |
+| GM / NARRATOR (runGmTurn) | **claude-opus-4-7** | gemma4:26b |
 | COMPANION (respondAsCompanion) | claude-haiku-4-5 | gemma4:26b |
+| NPC (runNpcTurn) | claude-haiku-4-5 | gemma4:26b |
 | UTIL (concierge, rolling summary) | claude-haiku-4-5 | gemma4:e2b |
 
 Ollama mode is **experimental, dev-only**, not production-ready — localhost is not reachable from Vercel, and tool support / JSON reliability vary per model. The `LlmError` union (`model_no_tool_support`, `ollama_unreachable`, `model_missing`, `bad_response`, `provider_error`) surfaces actionable hints.
 
 ### Companion reply flow
 
-The GM tool `prompt_companion` calls `respondAsCompanion()` in `lib/ai/companion-agent.ts` — one-shot call with the companion's `persona` as system prompt, last 6 messages as context. The companion's message is persisted as `author_kind='character'`, and the client then fires a follow-up SSE with `?trigger=companion_spoke` so the GM can react.
+Two paths invoke `respondAsCompanion()` in `lib/ai/companion-agent.ts`:
+
+1. **In-combat (automatic)** — when the orchestrator's cursor lands on a companion, `runTurnLoop` calls `respondAsCompanion` directly. The companion picks a target and rolls via `request_roll`; the server advances the cursor.
+2. **Narrative interaction (GM-triggered)** — out-of-combat, the narrator can call the `prompt_companion` tool to give a companion the floor. After the companion replies, the client fires a follow-up SSE with `?trigger=companion_spoke` so the narrator can react.
+
+In both cases the companion's message is persisted as `author_kind='character'` with `author_id=<companion uuid>`.
+
+### NPC turn flow
+
+`lib/ai/npc-agent.ts:runNpcTurn` runs one NPC's turn during combat. The orchestrator passes it the current `Participant` entry (single NPC, name, AC, HP, conditions) plus the full combat state so the agent can pick a target. Tool set is minimal: `request_roll`, `apply_condition`, `pass_turn`. The narrator never plays NPCs — the prompt explicitly tells it to stay out of NPC turns.
+
+NPC messages are persisted with `author_kind='character'`, `author_id=null`, and `metadata.npc_name` set so the UI can label the bubble.
 
 ### Data boundaries
 
@@ -98,10 +117,11 @@ The GM tool `prompt_companion` calls `respondAsCompanion()` in `lib/ai/companion
 - Rules tests live in `lib/rules/__tests__/` and are pure — no mocking needed.
 - Playwright e2e uses `tests/e2e/helpers/auth.ts` for test-user provisioning via Supabase admin + the `/api/test/login` cookie stamp.
 
-## When adding a new GM tool
+## When adding a new tool
 
-1. Declare the tool in `lib/ai/tools.ts` (`ToolDef` with `inputSchema`).
-2. Add a Zod schema + case in `executeTool()` in `lib/ai/gm-agent.ts`.
-3. If the tool mutates state using an id from the LLM, tenant-guard it first (`characterInSession`, `combatantBelongsToSession`).
-4. If the tool has a side-effect the concierge would duplicate (inventory/currency), think about ordering — concierge runs AFTER the turn from the final narration, so mid-turn tool calls remain the source of truth for that same turn.
-5. Update the GM system prompt in `gm-agent.ts` only if the new behavior is non-obvious from the tool description. Keep the prompt short — it's sent every turn.
+1. Declare the tool in `lib/ai/tools.ts` (`ToolDef` with `inputSchema`). Decide which agent set(s) it belongs to: `NARRATOR_TOOLS`, `NPC_TOOLS`, `COMPANION_TOOLS`.
+2. If the tool is shared between agents (e.g. another flavor of `request_roll`), add the executor to `lib/ai/tool-executors.ts`. Otherwise put the case in the agent that owns it (narrator's `executeTool` in `gm-agent.ts`, NPC's switch in `npc-agent.ts`, etc.).
+3. Add a Zod schema next to the executor. Validate before any side-effect.
+4. If the tool mutates state using an id from the LLM, tenant-guard it first (`characterInSession`, `combatantBelongsToSession`).
+5. If the tool has a side-effect the concierge would duplicate (inventory/currency), think about ordering — concierge runs AFTER all turns from the aggregated narration, so mid-turn tool calls remain the source of truth.
+6. Update the relevant system prompt only if the new behavior is non-obvious from the tool description. Keep prompts short — they're sent every turn.
