@@ -24,9 +24,9 @@
 
   /* Primary text on dark */
   --color-text: #f2e8d0;
-  --color-text-mid: #d8c8a8;
-  --color-text-mute: rgba(242, 232, 208, 0.6);
-  --color-text-faint: rgba(242, 232, 208, 0.4);
+  --color-text-mid: #e2d4b6;
+  --color-text-mute: rgba(242, 232, 208, 0.78);
+  --color-text-faint: rgba(242, 232, 208, 0.62);
 
   /* Accent — gold / candle */
   --color-gold: #d4a64c;
@@ -53,7 +53,10 @@
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
-html,
+html {
+  font-size: 17.5px;
+}
+
 body {
   background: var(--color-bg);
   color: var(--color-text);

@@ -70,8 +70,11 @@ export function InventorySection({ inventory }: { inventory: InventoryItem[] }) 
         <p className="font-narr italic text-text-mute">Sac vide. Le Conteur t'en fera trouver.</p>
       ) : (
         <ul className="divide-y divide-line border border-line">
-          {inventory.map((item) => (
-            <li key={item.id} className="flex items-baseline gap-3 px-3 py-2">
+          {inventory.map((item, idx) => (
+            <li
+              key={item.id ?? `${idx}-${item.name}`}
+              className="flex items-baseline gap-3 px-3 py-2"
+            >
               <div className="min-w-0 flex-1">
                 <p className="truncate font-narr text-base text-text">
                   <span className="font-semibold text-gold-bright">×{item.qty}</span> {item.name}

@@ -839,8 +839,11 @@ function InventoryInline({
         <p className="font-narr text-[12px] italic text-text-faint">Sac vide.</p>
       ) : (
         <ul className="space-y-0.5">
-          {visible.map((item) => (
-            <li key={item.id} className="flex justify-between font-narr text-[12px] text-text">
+          {visible.map((item, idx) => (
+            <li
+              key={item.id ?? `${idx}-${item.name}`}
+              className="flex justify-between font-narr text-[12px] text-text"
+            >
               <span className="truncate pr-2">{item.name}</span>
               <span className="shrink-0 font-mono text-text-mute">×{item.qty}</span>
             </li>
