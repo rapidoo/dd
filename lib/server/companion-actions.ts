@@ -5,8 +5,8 @@ import { respondAsCompanion } from '../ai/companion-agent';
 import { executeRoll, renderCombatBlock } from '../ai/gm-agent';
 import { createSupabaseServerClient, createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow, MessageRow } from '../db/types';
-import { activeEncounter } from './combat';
 import { requireUser } from './auth';
+import { activeEncounter } from './combat';
 
 const schema = z.object({
   sessionId: z.string().uuid(),

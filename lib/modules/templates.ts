@@ -186,7 +186,7 @@ export const MODULE_TEMPLATES: readonly ModuleTemplate[] = [
     title: "L'Héritage de la Sorcière",
     tagline: 'Un grimoire volé contenant des sorts interdits menace Toussaint.',
     summary:
-      "Lady Elara de Toussaint engage les joueurs pour retrouver un grimoire volé par un Doppler. La quête mène à une cabane en forêt où le Doppler, capable de prendre toute apparence, compte utiliser la magie pour dominer la région. Dilemme : rendre le grimoire, le détruire, ou le garder (avec des risques).",
+      'Lady Elara de Toussaint engage les joueurs pour retrouver un grimoire volé par un Doppler. La quête mène à une cabane en forêt où le Doppler, capable de prendre toute apparence, compte utiliser la magie pour dominer la région. Dilemme : rendre le grimoire, le détruire, ou le garder (avec des risques).',
     levelRange: '2-3',
     difficulty: 'intermédiaire',
     tones: ['enquête', 'intrigue', 'sauvage'],
@@ -214,7 +214,8 @@ export const MODULE_TEMPLATES: readonly ModuleTemplate[] = [
   {
     id: 'le-tournoi-de-la-lame-noire',
     title: 'Le Tournoi de la Lame Noire',
-    tagline: 'Un tournoi organisé par le Duc Radovid V cache un piège pour capturer des sorceleurs.',
+    tagline:
+      'Un tournoi organisé par le Duc Radovid V cache un piège pour capturer des sorceleurs.',
     summary:
       "Les joueurs sont invités à un tournoi à Novigrad. Mais le Duc Radovid V veut capturer des sorceleurs pour en faire des soldats. Stratégie au choix : gagner le tournoi puis s'échapper, ou saboter l'événement. Combat final contre le Duc ou ses sbires.",
     levelRange: '4-6',
@@ -225,6 +226,52 @@ export const MODULE_TEMPLATES: readonly ModuleTemplate[] = [
     sessionsEstimate: '2-3 sessions',
     universe: 'witcher',
     sourceFile: '',
+  },
+  // ============ Naheulbeuk Modules (Terre de Fangh) ============
+  {
+    id: 'la-statuette-de-gladeulfeurha',
+    title: 'La Statuette de Gladeulfeurha',
+    tagline: 'Le contrat fondateur : récupérer une statuette en or dans le Donjon de Naheulbeuk.',
+    summary:
+      "Une compagnie de bras cassés, recrutée par petite annonce à l'Auberge de la Truie qui File, accepte un contrat lucratif : récupérer une statuette en or massif dans le Donjon de Naheulbeuk, propriété du sorcier Zangdar. Sept niveaux de couloirs en équerre, gobelins de garde, squelettes en pause syndicale, troll des cuisines, et un boss allergique à la mauvaise musique.",
+    levelRange: '1-2',
+    difficulty: 'débutant',
+    tones: ['humour', 'dungeon', 'aventure', 'exploration'],
+    recommendedParty:
+      "6-7 PJ : la Compagnie canonique (Ranger chef, Voleur hobbit, Magicienne elfe, Nain guerrier, Elfe archère, Ogre barbare, Barbare humain). Au moins un personnage avec un instrument pour déclencher l'allergie de Zangdar.",
+    sessionsEstimate: '2-3 sessions',
+    universe: 'naheulbeuk',
+    sourceFile: 'Naheulbeuk_Bible_DnD5e',
+  },
+  {
+    id: 'l-auberge-de-la-truie-qui-file',
+    title: 'La Truie qui File',
+    tagline: "Bouldegom a disparu. Des gobelins encerclent l'auberge. Quelque chose se trame.",
+    summary:
+      "L'aubergiste Bouldegom a disparu en allant chez le boucher. Une bande de gobelins soudoyés par un sorcier rival encercle l'auberge pour récupérer un Cor de Brorne caché au grenier. Un client louche dans la cave (Glouk le Gobelin Bavard) implore protection. One-shot d'introduction parfait pour découvrir la Terre de Fangh.",
+    levelRange: '1-2',
+    difficulty: 'débutant',
+    tones: ['humour', 'aventure', 'combat', 'urbain'],
+    recommendedParty:
+      "3-5 PJ équilibrés : un combattant en front, un lanceur de sorts, un roublard pour la cave, un soigneur. Toute combinaison fonctionne — c'est l'auberge, pas le donjon ultime.",
+    sessionsEstimate: '1 session',
+    universe: 'naheulbeuk',
+    sourceFile: 'Naheulbeuk_Bible_DnD5e',
+  },
+  {
+    id: 'le-reveil-de-dlul',
+    title: 'Le Réveil de Dlul',
+    tagline: 'Dans tout Waldorg, les gens dorment trop. Une secte ramène le dieu du Sommeil.',
+    summary:
+      "Des villages entiers vivent au ralenti, certains ne se réveillent plus. La Société des Onze Mécréants a réactivé un Sanctuaire oublié sous Waldorg. Sur 7 nuits, +10 % de la population du royaume sombre dans une torpeur cosmique. Enquête à Glargh, plongée dans les Catacombes (et ses tribus hobbites Pieds-Sales), confrontation avec l'Avatar de Dlul. Faiblesse : le bruit.",
+    levelRange: '3-5',
+    difficulty: 'intermédiaire',
+    tones: ['humour', 'enquête', 'horreur', 'dungeon', 'exploration'],
+    recommendedParty:
+      "4-6 PJ avec au moins un Barde ou un instrument bruyant pour les dégâts radiants contre l'Avatar. Un Paladin (Théo de Reuk) aide moralement. Prévoir résistances au sommeil magique.",
+    sessionsEstimate: '4-6 sessions',
+    universe: 'naheulbeuk',
+    sourceFile: 'Naheulbeuk_Bible_DnD5e',
   },
 ];
 

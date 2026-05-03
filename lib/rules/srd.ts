@@ -393,13 +393,7 @@ export const WITCHER_CLASSES: Record<string, ClassData> = {
     casterType: 'none',
     savingThrowProficiencies: ['str', 'con'],
     skillChoices: 2,
-    skillList: [
-      'athletics',
-      'intimidation',
-      'perception',
-      'survival',
-      'animalHandling',
-    ],
+    skillList: ['athletics', 'intimidation', 'perception', 'survival', 'animalHandling'],
   },
   alchemist: {
     id: 'alchemist',
@@ -421,24 +415,242 @@ export const WITCHER_CLASSES: Record<string, ClassData> = {
   },
 };
 
+// ============ Naheulbeuk Universe Adaptations ============
+//
+// Le Donjon de Naheulbeuk (Terre de Fangh) — parodic D&D 5e setting.
+// Races taken from the Bible de la Terre de Fangh §III, classes from §VI.
+// All classes remain mechanically D&D 5e (parody is in the flavor / GM tone).
+
+export const NAHEULBEUK_SPECIES: Record<string, SpeciesData> = {
+  human: {
+    id: 'human',
+    name: 'Humain de Fangh',
+    baseSpeed: 9,
+    abilityBonuses: { str: 1, dex: 1, con: 1, int: 1, wis: 1, cha: 1 },
+  },
+  dwarf: {
+    id: 'dwarf',
+    name: 'Nain',
+    baseSpeed: 7.5,
+    abilityBonuses: { con: 2, str: 1 },
+  },
+  elf: {
+    id: 'elf',
+    name: 'Elfe',
+    baseSpeed: 9,
+    abilityBonuses: { dex: 2, cha: 1 },
+  },
+  halfElf: {
+    id: 'halfElf',
+    name: 'Demi-Elfe',
+    baseSpeed: 9,
+    abilityBonuses: { cha: 2, dex: 1 },
+  },
+  ogre: {
+    id: 'ogre',
+    name: 'Ogre',
+    baseSpeed: 9,
+    abilityBonuses: { str: 2, con: 1 },
+  },
+  orc: {
+    id: 'orc',
+    name: 'Orc',
+    baseSpeed: 9,
+    abilityBonuses: { str: 2, con: 1 },
+  },
+  goblin: {
+    id: 'goblin',
+    name: 'Gobelin',
+    baseSpeed: 9,
+    abilityBonuses: { dex: 2, con: 1 },
+  },
+  halfling: {
+    id: 'halfling',
+    name: 'Hobbit',
+    baseSpeed: 7.5,
+    abilityBonuses: { dex: 2, cha: 1 },
+  },
+  troll: {
+    id: 'troll',
+    name: 'Troll',
+    baseSpeed: 9,
+    abilityBonuses: { str: 3, con: 2 },
+  },
+  halfDemon: {
+    id: 'halfDemon',
+    name: 'Demi-Démon',
+    baseSpeed: 9,
+    abilityBonuses: { cha: 1, int: 1, str: 1 },
+  },
+  houchou: {
+    id: 'houchou',
+    name: 'Houchou',
+    baseSpeed: 9,
+    abilityBonuses: { wis: 2, dex: 1 },
+  },
+};
+
+// Naheulbeuk classes mirror the seven canonical members of the Compagnie
+// (Ranger, Voleur, Magicienne, Nain, Elfe, Ogre, Barbare) plus Paladin
+// (Théo de Reuk) and Barde (Mlek). All map to standard 5e mechanics.
+export const NAHEULBEUK_CLASSES: Record<string, ClassData> = {
+  ranger: {
+    id: 'ranger',
+    name: 'Ranger',
+    hitDie: 'd10',
+    primaryAbility: ['dex', 'wis'],
+    casterType: 'half',
+    spellAbility: 'wis',
+    savingThrowProficiencies: ['str', 'dex'],
+    skillChoices: 3,
+    skillList: [
+      'animalHandling',
+      'athletics',
+      'insight',
+      'investigation',
+      'nature',
+      'perception',
+      'persuasion',
+      'stealth',
+      'survival',
+    ],
+  },
+  rogue: {
+    id: 'rogue',
+    name: 'Voleur',
+    hitDie: 'd8',
+    primaryAbility: ['dex'],
+    casterType: 'none',
+    savingThrowProficiencies: ['dex', 'int'],
+    skillChoices: 4,
+    skillList: [
+      'acrobatics',
+      'athletics',
+      'deception',
+      'insight',
+      'intimidation',
+      'investigation',
+      'perception',
+      'performance',
+      'persuasion',
+      'sleightOfHand',
+      'stealth',
+    ],
+  },
+  wizard: {
+    id: 'wizard',
+    name: 'Magicienne',
+    hitDie: 'd6',
+    primaryAbility: ['int'],
+    casterType: 'full',
+    spellAbility: 'int',
+    savingThrowProficiencies: ['int', 'wis'],
+    skillChoices: 2,
+    skillList: ['arcana', 'history', 'insight', 'investigation', 'medicine', 'religion'],
+  },
+  fighter: {
+    id: 'fighter',
+    name: 'Guerrier',
+    hitDie: 'd10',
+    primaryAbility: ['str'],
+    casterType: 'none',
+    savingThrowProficiencies: ['str', 'con'],
+    skillChoices: 2,
+    skillList: [
+      'acrobatics',
+      'animalHandling',
+      'athletics',
+      'history',
+      'insight',
+      'intimidation',
+      'perception',
+      'survival',
+    ],
+  },
+  barbarian: {
+    id: 'barbarian',
+    name: 'Barbare',
+    hitDie: 'd12',
+    primaryAbility: ['str'],
+    casterType: 'none',
+    savingThrowProficiencies: ['str', 'con'],
+    skillChoices: 2,
+    skillList: ['animalHandling', 'athletics', 'intimidation', 'nature', 'perception', 'survival'],
+  },
+  paladin: {
+    id: 'paladin',
+    name: 'Paladin',
+    hitDie: 'd10',
+    primaryAbility: ['str', 'cha'],
+    casterType: 'half',
+    spellAbility: 'cha',
+    savingThrowProficiencies: ['wis', 'cha'],
+    skillChoices: 2,
+    skillList: ['athletics', 'insight', 'intimidation', 'medicine', 'persuasion', 'religion'],
+  },
+  bard: {
+    id: 'bard',
+    name: 'Barde',
+    hitDie: 'd8',
+    primaryAbility: ['cha'],
+    casterType: 'full',
+    spellAbility: 'cha',
+    savingThrowProficiencies: ['dex', 'cha'],
+    skillChoices: 3,
+    skillList: [
+      'acrobatics',
+      'deception',
+      'history',
+      'insight',
+      'performance',
+      'persuasion',
+      'sleightOfHand',
+      'stealth',
+    ],
+  },
+  cleric: {
+    id: 'cleric',
+    name: 'Prêtre',
+    hitDie: 'd8',
+    primaryAbility: ['wis'],
+    casterType: 'full',
+    spellAbility: 'wis',
+    savingThrowProficiencies: ['wis', 'cha'],
+    skillChoices: 2,
+    skillList: ['history', 'insight', 'medicine', 'persuasion', 'religion'],
+  },
+};
+
 // Helper function to get species for a given universe
-export function getSpeciesForUniverse(universe: 'dnd5e' | 'witcher'): Record<string, SpeciesData> {
-  return universe === 'witcher' ? WITCHER_SPECIES : SPECIES;
+export function getSpeciesForUniverse(
+  universe: 'dnd5e' | 'witcher' | 'naheulbeuk',
+): Record<string, SpeciesData> {
+  if (universe === 'witcher') return WITCHER_SPECIES;
+  if (universe === 'naheulbeuk') return NAHEULBEUK_SPECIES;
+  return SPECIES;
 }
 
 // Helper function to get classes for a given universe
-export function getClassesForUniverse(universe: 'dnd5e' | 'witcher'): Record<string, ClassData> {
-  return universe === 'witcher' ? WITCHER_CLASSES : CLASSES;
+export function getClassesForUniverse(
+  universe: 'dnd5e' | 'witcher' | 'naheulbeuk',
+): Record<string, ClassData> {
+  if (universe === 'witcher') return WITCHER_CLASSES;
+  if (universe === 'naheulbeuk') return NAHEULBEUK_CLASSES;
+  return CLASSES;
 }
 
 // Get species as array of {id, name} for select options
-export function getSpeciesOptions(universe: 'dnd5e' | 'witcher'): Array<{ id: string; name: string }> {
+export function getSpeciesOptions(
+  universe: 'dnd5e' | 'witcher' | 'naheulbeuk',
+): Array<{ id: string; name: string }> {
   const species = getSpeciesForUniverse(universe);
   return Object.entries(species).map(([id, data]) => ({ id, name: data.name }));
 }
 
 // Get classes as array of {id, name} for select options
-export function getClassOptions(universe: 'dnd5e' | 'witcher'): Array<{ id: string; name: string }> {
+export function getClassOptions(
+  universe: 'dnd5e' | 'witcher' | 'naheulbeuk',
+): Array<{ id: string; name: string }> {
   const classes = getClassesForUniverse(universe);
   return Object.entries(classes).map(([id, data]) => ({ id, name: data.name }));
 }

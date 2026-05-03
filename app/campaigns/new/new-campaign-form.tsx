@@ -3,7 +3,7 @@
 import { useActionState, useState } from 'react';
 import { BtnPrimary } from '../../../components/ui/button';
 import type { CampaignRow, Universe } from '../../../lib/db/types';
-import { MODULE_TEMPLATES, getModulesByUniverse } from '../../../lib/modules/templates';
+import { getModulesByUniverse, MODULE_TEMPLATES } from '../../../lib/modules/templates';
 import { createCampaign, type ServerResult } from '../../../lib/server/campaigns';
 
 const MODES: Array<{
@@ -91,7 +91,7 @@ export function NewCampaignForm() {
 
       <fieldset className="flex flex-col gap-3">
         <legend className="text-xs uppercase tracking-[0.2em] text-text-mute">Univers</legend>
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-3">
           <label
             className={`flex cursor-pointer flex-col gap-1 border border-line bg-card p-4 has-[:checked]:border-gold has-[:checked]:bg-[rgba(212,166,76,0.08)]`}
           >
@@ -105,7 +105,9 @@ export function NewCampaignForm() {
             />
             <span className="font-display text-xl text-gold-bright">⚔</span>
             <span className="font-display text-sm text-text">Donjons & Dragons 5e</span>
-            <span className="text-xs text-text-mute">Règles D&D 5e standard : classes, races, magie, alignement.</span>
+            <span className="text-xs text-text-mute">
+              Règles D&D 5e standard : classes, races, magie, alignement.
+            </span>
           </label>
           <label
             className={`flex cursor-pointer flex-col gap-1 border border-line bg-card p-4 has-[:checked]:border-gold has-[:checked]:bg-[rgba(212,166,76,0.08)]`}
@@ -120,7 +122,27 @@ export function NewCampaignForm() {
             />
             <span className="font-display text-xl text-gold-bright">🏹</span>
             <span className="font-display text-sm text-text">The Witcher</span>
-            <span className="text-xs text-text-mute">Univers sombre et réaliste : sorceleurs, monstres, magie des Signes, alchimie.</span>
+            <span className="text-xs text-text-mute">
+              Univers sombre et réaliste : sorceleurs, monstres, magie des Signes, alchimie.
+            </span>
+          </label>
+          <label
+            className={`flex cursor-pointer flex-col gap-1 border border-line bg-card p-4 has-[:checked]:border-gold has-[:checked]:bg-[rgba(212,166,76,0.08)]`}
+          >
+            <input
+              type="radio"
+              name="universe"
+              value="naheulbeuk"
+              checked={universe === 'naheulbeuk'}
+              onChange={() => setUniverse('naheulbeuk')}
+              className="sr-only"
+            />
+            <span className="font-display text-xl text-gold-bright">🍺</span>
+            <span className="font-display text-sm text-text">Donjon de Naheulbeuk</span>
+            <span className="text-xs text-text-mute">
+              Terre de Fangh : parodie joyeusement con. Bras cassés héroïques, échecs sympathiques,
+              Zangdar.
+            </span>
           </label>
         </div>
       </fieldset>
@@ -128,7 +150,8 @@ export function NewCampaignForm() {
       {settingMode === 'module' && (
         <section className="flex flex-col gap-3">
           <p className="text-xs uppercase tracking-[0.2em] text-text-mute">
-            Choisis un module — {getModulesByUniverse(universe).length} disponibles pour {universe === 'dnd5e' ? 'D&D 5e' : 'The Witcher'}
+            Choisis un module — {getModulesByUniverse(universe).length} disponibles pour{' '}
+            {universeLabel(universe)}
           </p>
           <input type="hidden" name="moduleId" value={moduleId ?? ''} />
           <div className="grid gap-3 md:grid-cols-2">
@@ -206,6 +229,17 @@ export function NewCampaignForm() {
       </div>
     </form>
   );
+}
+
+function universeLabel(u: Universe): string {
+  switch (u) {
+    case 'dnd5e':
+      return 'D&D 5e';
+    case 'witcher':
+      return 'The Witcher';
+    case 'naheulbeuk':
+      return 'Naheulbeuk';
+  }
 }
 
 function difficultyColor(d: string): string {

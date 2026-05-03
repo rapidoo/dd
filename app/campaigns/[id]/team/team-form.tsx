@@ -2,9 +2,13 @@
 
 import { useActionState, useState, useTransition } from 'react';
 import { BtnPrimary } from '../../../../components/ui/button';
-import type { CharacterRow } from '../../../../lib/db/types';
-import type { Universe } from '../../../../lib/db/types';
-import { getClassOptions, getSpeciesForUniverse, getSpeciesOptions, getClassesForUniverse } from '../../../../lib/rules/srd';
+import type { CharacterRow, Universe } from '../../../../lib/db/types';
+import {
+  getClassesForUniverse,
+  getClassOptions,
+  getSpeciesForUniverse,
+  getSpeciesOptions,
+} from '../../../../lib/rules/srd';
 import type { ServerResult } from '../../../../lib/server/campaigns';
 import { createCompanion } from '../../../../lib/server/companions';
 import { suggestName, suggestPersona } from '../../../../lib/server/persona-suggest';
@@ -18,7 +22,7 @@ export function TeamForm({ campaignId, universe }: { campaignId: string; univers
   const species = getSpeciesForUniverse(universe);
   const classOptions = getClassOptions(universe);
   const speciesOptions = getSpeciesOptions(universe);
-  
+
   const [name, setName] = useState('');
   const [speciesId, setSpeciesId] = useState(speciesOptions[0]?.id ?? 'dwarf');
   const [classId, setClassId] = useState(classOptions[0]?.id ?? 'fighter');

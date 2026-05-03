@@ -21,7 +21,7 @@ export default async function TeamPage({ params }: { params: Promise<{ id: strin
     .eq('is_ai', true)
     .order('created_at', { ascending: true });
   const companions = (data ?? []) as CharacterRow[];
-  
+
   const universe = campaign.universe ?? 'dnd5e';
   const speciesData = getSpeciesForUniverse(universe);
   const classesData = getClassesForUniverse(universe);
@@ -52,7 +52,8 @@ export default async function TeamPage({ params }: { params: Promise<{ id: strin
         {companions.map((c) => (
           <article key={c.id} className="border border-line bg-card p-5">
             <p className="font-display text-xs uppercase tracking-[0.25em] text-gold">
-              {speciesData[c.species]?.name ?? c.species} · {classesData[c.class]?.name ?? c.class} {c.level}
+              {speciesData[c.species]?.name ?? c.species} · {classesData[c.class]?.name ?? c.class}{' '}
+              {c.level}
             </p>
             <h2 className="mt-1 font-narr text-2xl text-gold-bright">{c.name}</h2>
             {typeof c.persona === 'object' && c.persona && 'notes' in c.persona ? (
