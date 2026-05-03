@@ -9,7 +9,7 @@ import {
 
 /**
  * Ollama adapter. Talks to the native /api/chat endpoint with non-streaming
- * responses. Tool calls supported since Ollama v0.4; Gemma 3 is tool-capable.
+ * responses. Tool calls supported since Ollama v0.4; gemma4 is tool-capable.
  */
 export function createOllamaProvider(modelFor: (req: ChatRequest) => string): LlmProvider {
   return {
@@ -18,6 +18,11 @@ export function createOllamaProvider(modelFor: (req: ChatRequest) => string): Ll
       const body = {
         model,
         stream: false,
+        // gemma4:26b/:31b are reasoning models that emit ~150 hidden thinking
+        // tokens before the visible answer; with our short maxTokens budgets
+        // the visible reply ends up empty. Disable thinking by default — the
+        // flag is silently ignored on non-thinking models.
+        think: false,
         options: {
           num_predict: req.maxTokens,
           ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
@@ -35,8 +40,8 @@ export function createOllamaProvider(modelFor: (req: ChatRequest) => string): Ll
               })),
             }
           : {}),
-        // Constrained decoding when the caller needs clean JSON back — Gemma
-        // 3 otherwise likes to wrap output in prose or markdown fences.
+        // Constrained decoding when the caller needs clean JSON back — gemma4
+        // otherwise likes to wrap output in prose or markdown fences.
         ...(req.jsonMode ? { format: 'json' as const } : {}),
       };
 
@@ -67,7 +72,7 @@ export function createOllamaProvider(modelFor: (req: ChatRequest) => string): Ll
         if (/does not support tools/i.test(text)) {
           throw new LlmError(
             'model_no_tool_support',
-            `Model "${model}" doesn't support tool calling under Ollama. Use a tool-capable model (qwen2.5, mistral-nemo, llama3.1+, command-r-plus) for the GM role — set LLM_MODEL_GM accordingly.`,
+            `Model "${model}" doesn't support tool calling under Ollama. Pick a tool-capable gemma4 tag (e4b, 26b, 31b) — set LLM_MODEL_GM accordingly.`,
             { model, body: text },
           );
         }
@@ -108,17 +113,22 @@ export function parseOllamaResponse(data: OllamaChatResponse): ChatResponse {
     try {
       parsed = typeof args === 'string' ? JSON.parse(args) : (args ?? {});
     } catch {
-      // Gemma sometimes emits already-string arguments that aren't valid JSON.
+      // gemma4 sometimes emits already-string arguments that aren't valid JSON.
       // Drop the call so Zod downstream produces an "invalid input" feedback.
       return;
     }
     toolCalls.push({ id: `tc_${i}_${name}`, name, input: parsed });
   });
-  return {
-    text,
-    toolCalls,
-    stopReason: toolCalls.length > 0 ? 'tool_use' : 'end_turn',
-  };
+  // Tool calls always win — when present the loop must continue. Otherwise map
+  // Ollama's `done_reason` so callers can detect truncation (length) instead of
+  // mistaking a cut-off response for a completed turn.
+  const stopReason: ChatResponse['stopReason'] =
+    toolCalls.length > 0
+      ? 'tool_use'
+      : data.done_reason === 'length'
+        ? 'max_tokens'
+        : 'end_turn';
+  return { text, toolCalls, stopReason };
 }
 
 function toOllamaMessages(req: ChatRequest): OllamaMessage[] {

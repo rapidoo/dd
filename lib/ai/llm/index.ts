@@ -26,12 +26,12 @@ const ANTHROPIC_DEFAULTS: Record<LlmRole, string> = {
 };
 
 // All-Gemma 4 defaults, mapped by power tier :
-//   builder   → 31b (20GB) pour la création de campagne/persona
+//   builder   → e4b (8B) pour suggérer noms/persona — réponses courtes, throughput
 //   gm        → 26b (18GB) pour la narration en session
 //   companion → 26b (18GB) pour garder la personnalité cohérente en contexte long
 //   util      → e4b pour concierge/summary (throughput)
 const OLLAMA_DEFAULTS: Record<LlmRole, string> = {
-  builder: 'gemma4:31b',
+  builder: 'gemma4:e4b',
   gm: 'gemma4:26b',
   companion: 'gemma4:26b',
   util: 'gemma4:e4b',

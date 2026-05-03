@@ -91,6 +91,26 @@ describe('parseOllamaResponse', () => {
   it('throws on a missing message block', () => {
     expect(() => parseOllamaResponse({} as never)).toThrow(/bad_response|message/i);
   });
+
+  it('maps done_reason="length" to stopReason="max_tokens" when no tool calls', () => {
+    const out = parseOllamaResponse({
+      message: { role: 'assistant', content: 'narration tronquée' },
+      done_reason: 'length',
+    });
+    expect(out.stopReason).toBe('max_tokens');
+  });
+
+  it('keeps stopReason="tool_use" even when done_reason="length"', () => {
+    const out = parseOllamaResponse({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ function: { name: 'request_roll', arguments: {} } }],
+      },
+      done_reason: 'length',
+    });
+    expect(out.stopReason).toBe('tool_use');
+  });
 });
 
 describe('createOllamaProvider — fetch wiring', () => {
@@ -139,6 +159,7 @@ describe('createOllamaProvider — fetch wiring', () => {
     expect(capture.body).toMatchObject({
       model: 'gemma3:4b',
       stream: false,
+      think: false,
       options: { num_predict: 100 },
     });
     const bodyMessages = capture.body?.messages as Array<Record<string, unknown>>;
