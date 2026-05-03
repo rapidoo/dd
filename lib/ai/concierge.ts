@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { createSupabaseServiceClient } from '../db/server';
-import type { CharacterRow } from '../db/types';
+import type { CharacterRow, Universe } from '../db/types';
 import {
   type EntityKind,
   type FactKind,
@@ -12,6 +12,7 @@ import {
 } from '../neo4j/queries';
 import type { InventoryItem } from '../server/inventory-actions';
 import { llm } from './llm';
+import { getConciergePrompt } from './universe';
 
 /**
  * Post-turn "janitor" pass. Opus is the storyteller; the concierge reads
@@ -106,6 +107,7 @@ export interface ConciergeInput {
   narration: string;
   player: CharacterRow | null;
   companions: CharacterRow[];
+  universe?: Universe | null;
 }
 
 export async function runConcierge(input: ConciergeInput): Promise<void> {
@@ -210,6 +212,8 @@ async function extract(
     .map((c) => `  - character_id="${c.id}" → ${c.name}${c.is_ai ? ' (allié IA)' : ' (joueur)'}`)
     .join('\n');
 
+  const conciergePrompt = getConciergePrompt(input.universe);
+
   try {
     const response = await llm().chat({
       role: 'util',
@@ -218,7 +222,7 @@ async function extract(
       messages: [
         {
           role: 'user',
-          content: `Tu es le concierge mécanique d'une partie de D&D 5e. Lis la narration finale du Conteur et extrais TROIS choses au format JSON :
+          content: `${conciergePrompt} Lis la narration finale du Conteur et extrais TROIS choses au format JSON :
 
 1) "entities" — chaque fois qu'un PNJ, lieu, faction, objet NOMMÉ, quête ou événement notable est mentionné, cite-le. Tu DOIS lister même les entités déjà connues (le système dédoublonne côté graphe). Ignore seulement les foules anonymes ("des gardes", "une taverne sans nom").
 2) "facts" — propositions narratives apprises ou confirmées pendant ce tour. Attache chaque fait à une entité (about_entity_name doit matcher un name de "entities" ou d'une entité déjà en mémoire). Exemples : "Vaeloria se méfie des humains" (behavior) ; "Razmoo a juré de protéger Aldric" (promise) ; "Le Maître Gris est en réalité Malkron" (secret).

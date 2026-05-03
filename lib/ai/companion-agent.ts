@@ -1,40 +1,13 @@
 import { createSupabaseServiceClient } from '../db/server';
-import type { CharacterRow, MessageRow } from '../db/types';
+import type { CharacterRow, MessageRow, Universe } from '../db/types';
 import type { CombatState } from '../server/combat-loop';
-import type { GmEvent } from './gm-agent';
+import type { GmEvent } from './events';
 import { llm } from './llm';
 import type { ChatMessage, ToolResultIn } from './llm/types';
 import { sanitizeNarration } from './sanitize';
+import { executePassTurn, parseToolInput, passTurnSchema } from './tool-executors';
 import { COMPANION_TOOLS, type RequestRollInput } from './tools';
-
-const COMPANION_SYSTEM_BASE = (
-  character: CharacterRow,
-  hint: string | null,
-  combatBlock: string,
-) => `Tu joues ${character.name}, un compagnon de voyage du joueur dans une partie de D&D 5e.
-
-Fiche courte :
-- Espèce : ${character.species}
-- Classe : ${character.class} (niveau ${character.level})
-- PV : ${character.current_hp}/${character.max_hp} · CA : ${character.ac}
-- Personnalité : ${formatPersona(character.persona)}
-
-Règles de réplique :
-- Tu n'es PAS le MJ. Tu réagis comme un personnage joueur — 1 à 3 phrases. Pas de markdown, pas d'emojis.
-- Parle en français. Utilise <em>…</em> pour les paroles à haute voix.
-- Ne décris PAS la scène elle-même — laisse ça au MJ. Tu exprimes une réaction, une action, un commentaire bref.
-
-${combatBlock ? `Combat — c'est TON tour si le marqueur ▶ pointe sur toi.${combatBlock}\n` : ''}RÈGLE CRITIQUE — Outils : tu disposes de l'outil de jet (request_roll). Tu l'invoques UNIQUEMENT via le canal tool_calls structuré. N'écris JAMAIS son nom ni ses arguments dans la narration en prose (pas de "request_roll(...)", pas de "dice:1d20+5,kind:attack,..."). Si tu veux rouler, émets un tool_call ; sinon raconte simplement.
-
-Règles d'action en combat :
-- Quand tu attaques, déclare ton intention en 1-2 phrases (qui, quoi, comment) PUIS lance le jet d'attaque via tool_call (kind="attack", target_ac, target_combatant_id). N'invente pas l'issue avant le jet.
-- Sur touche ou crit, enchaîne IMMÉDIATEMENT un jet de dégâts via tool_call (kind="damage", target_combatant_id). Le serveur applique les dégâts automatiquement et passe au combattant suivant.
-- Sur soin, kind="heal" + target_combatant_id sur un allié. Le serveur remonte les PV et passe au suivant.
-- Cible : utilise les ids exacts du bloc Initiative (npc-* pour les ennemis, UUID pour PJ/compagnons).
-- Pas de "Fais un jet" / "Lance un dé" en texte — tu rolles toi-même via le tool_call. Jamais de PV dans le texte.
-- Hors combat, tu peux aussi rouler une compétence via tool_call (kind="check") pour une action discrète.${
-  hint ? `\n\nIndication pour cette réplique : ${hint}` : ''
-}`;
+import { buildCompanionPrompt } from './universe';
 
 function formatPersona(persona: Record<string, unknown> | null): string {
   if (!persona) return 'inconnue';
@@ -62,6 +35,8 @@ export async function respondAsCompanion(opts: {
   combatState: CombatState | null;
   /** Renders an "Initiative …" block when an encounter is active. */
   combatBlock: string;
+  /** Universe of the campaign — selects tone & vocabulary in the system prompt. */
+  universe?: Universe | null;
   /** Roll executor injected by gm-agent. Same impl the GM uses. */
   executeRoll: (
     input: RequestRollInput,
@@ -79,7 +54,12 @@ export async function respondAsCompanion(opts: {
     }));
   messages.push({ role: 'user', content: "C'est ton tour de réagir en tant que ce compagnon." });
 
-  const system = COMPANION_SYSTEM_BASE(opts.character, opts.hint ?? null, opts.combatBlock);
+  const effectiveUniverse = opts.universe ?? 'dnd5e';
+  const system = buildCompanionPrompt(effectiveUniverse, {
+    character: opts.character,
+    hint: opts.hint ?? null,
+    combatBlock: opts.combatBlock,
+  });
 
   const events: GmEvent[] = [];
   const textParts: string[] = [];
@@ -112,6 +92,15 @@ export async function respondAsCompanion(opts: {
         const result = await opts.executeRoll(call.input as RequestRollInput, opts.sessionId);
         results.push({ toolUseId: call.id, content: JSON.stringify(result.result) });
         for (const ev of result.events) events.push(ev);
+      } else if (call.name === 'pass_turn') {
+        const parsed = parseToolInput(passTurnSchema, call.input);
+        if (!parsed.ok) {
+          results.push({ toolUseId: call.id, content: JSON.stringify(parsed.result) });
+        } else {
+          const result = await executePassTurn(opts.sessionId);
+          results.push({ toolUseId: call.id, content: JSON.stringify(result.result) });
+          for (const ev of result.events) events.push(ev);
+        }
       } else {
         // Unknown tool — feed an error back so the model self-corrects.
         results.push({

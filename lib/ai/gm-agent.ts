@@ -1,18 +1,16 @@
 import { z } from 'zod';
 import { createSupabaseServiceClient } from '../db/server';
-import type { CharacterRow, MessageRow } from '../db/types';
+import type { CharacterRow, MessageRow, Universe } from '../db/types';
 import {
   type EntityKind,
   listEntitiesForCampaign,
   searchEntities,
   upsertEntityNode,
 } from '../neo4j/queries';
-import { parseDiceExpression, rollD20, rollExpression } from '../rules/dice';
 import { CONDITION_TYPES, type ConditionType } from '../rules/types';
 import { weaponAttack } from '../rules/weapon-attack';
 import {
   advanceUntilNextActor,
-  applyConditionToParticipant,
   applyDamageToParticipant,
   type CombatState,
   getActiveCombatState,
@@ -21,38 +19,28 @@ import {
 } from '../server/combat-loop';
 import type { InventoryItem } from '../server/inventory-actions';
 import { respondAsCompanion } from './companion-agent';
+import type { DiceRollRecord, GmEvent } from './events';
 import { llm } from './llm';
 import type { ChatMessage, ToolCallOut, ToolResultIn } from './llm/types';
 import { compactHistory } from './rolling-summary';
 import { hasTextualToolCall, sanitizeNarration } from './sanitize';
 import { campaignIdOfSession, characterInSession, combatantBelongsToSession } from './tenant-guard';
+import {
+  applyConditionSchema,
+  executeApplyCondition,
+  executePassTurn,
+  executeRoll,
+  nextActorInfo,
+  parseToolInput,
+  passTurnSchema,
+  rollSchema,
+} from './tool-executors';
 import { GM_TOOLS, type RecordEntityInput, type RequestRollInput } from './tools';
+import { getGmPrompt, getUniverseConfig } from './universe';
 
-const GM_SYSTEM_PROMPT = `Tu es "Le Conteur", MJ d'une partie de D&D 5e SRD. Style dark fantasy cozy, français, 3-6 phrases par tour, pas de markdown, pas d'emojis. Format texte brut UNIQUEMENT — la SEULE balise autorisée est <em>…</em> pour les paroles de PNJ. Aucune autre balise HTML (pas de <span>, <p>, <i>, <strong>, <br>, ni styles inline). Théâtre de l'esprit (pas de grille).
-
-RÈGLE CRITIQUE — Outils : tu disposes d'outils (request_roll, start_combat, apply_damage, apply_condition, prompt_companion, grant_item, adjust_currency, cast_spell, trigger_rest, record_entity, recall_memory). Tu les invoques UNIQUEMENT via le canal tool_calls structuré. N'écris JAMAIS leur nom dans la narration — pas de "start_combat(...)", pas de "apply_damage(...)" en prose. Si tu as besoin d'un outil, émets un tool_call ; sinon raconte simplement la scène.
-
-Combat — pilotage SERVEUR : le serveur enchaîne automatiquement les tours (skip des combattants à 0 PV inclus) et termine la rencontre quand tous les ennemis sont à terre. Tu n'as pas d'outil "tour suivant" ni "fin de combat". Sur ton tour ou celui d'un PNJ : narre la scène, lance le jet via tool_call, c'est tout. Le serveur fait le reste.
-
-Jets de dés : TOUJOURS via l'outil de jet avant de décrire l'issue. Jamais "Fais un jet", "Lance un dé", "Jette les dés" en texte.
-
-Chaîne attaque → dégâts : sur touche ou critique, enchaîne IMMÉDIATEMENT un jet de dégâts (kind="damage", target_combatant_id=<UUID cible>) via tool_call. Le serveur APPLIQUE automatiquement les dégâts — pas besoin d'appeler apply_damage en plus. Sur critique, double les dés d'arme. Nat 20 = critique, nat 1 = complication.
-
-Soins : utilise kind="heal" (pas "damage") avec target_combatant_id pour faire remonter les PV. Le serveur applique automatiquement.
-
-PV & états : utilise les outils dégâts/soins/conditions. Ne JAMAIS écrire les PV en texte — l'UI les affiche depuis la DB.
-
-Tours en combat (quand un bloc "Combat actif" est présent) :
-- Tour PNJ : décide son action, fais le jet d'attaque (target_ac, target_combatant_id), enchaîne les dégâts si touche, narre. Le serveur passera au combattant suivant tout seul.
-- Tour PJ : si le joueur a parlé tu résous, sinon décris l'instant et attends son input.
-- Tour compagnon : donne-lui la parole via l'outil compagnon. Le serveur enchaînera.
-- Cible à 0 PV : narre sa chute. Le serveur la saute et termine la rencontre quand tous les PNJ sont à 0.
-
-Butin : narre librement qui ramasse/donne/dépense quoi — un concierge post-tour met à jour bourses et inventaires. Tu peux quand même utiliser les outils objet/bourse si un transfert doit se faire en plein tour (dépense AVANT un gain).
-
-Ne résume pas l'action du joueur — enchaîne sur les conséquences. Conclus souvent par "Que fais-tu ?".`;
-
-import type { Universe } from '../db/types';
+// Re-export types for backwards compatibility while the rename is in progress.
+export type { DiceRollRecord, GmEvent };
+export { executeRoll };
 
 export interface GmTurnInput {
   sessionId: string;
@@ -64,39 +52,6 @@ export interface GmTurnInput {
   worldSummary?: string | null;
   /** Universe for the campaign (dnd5e or witcher) — affects GM style and rules. */
   universe?: Universe | null;
-}
-
-export type GmEvent =
-  | { type: 'text_delta'; delta: string }
-  | { type: 'dice_request'; rollId: string; roll: DiceRollRecord; label: string }
-  | { type: 'memory_recalled'; query: string; result: string }
-  | { type: 'entity_recorded'; kind: string; name: string }
-  | { type: 'companion'; characterId: string; characterName: string; content: string }
-  | { type: 'combat_started'; combatId: string }
-  | { type: 'combat_ended' }
-  | { type: 'combat_state'; state: CombatState }
-  // Light "party may have changed" signal for non-combat mutations
-  // (inventory, currency, spell slots, rest). Kept distinct from combat_state
-  // because no combat payload exists for these.
-  | { type: 'party_update' }
-  | { type: 'done' }
-  | { type: 'error'; message: string };
-
-export interface DiceRollRecord {
-  id?: string;
-  kind: string;
-  /** Human-readable label chosen by the GM, e.g. "Perception", "Sauvegarde SAG". */
-  label: string;
-  expression: string;
-  dice: number[];
-  modifier: number;
-  total: number;
-  outcome: string | null;
-  advantage: 'normal' | 'advantage' | 'disadvantage';
-  /** DC for saves/checks. */
-  dc?: number;
-  /** Target AC for attacks. */
-  targetAC?: number;
 }
 
 /**
@@ -292,7 +247,7 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     messages.push({ role: 'assistant', content: fullText, toolCalls: response.toolCalls });
     const results: ToolResultIn[] = [];
     for (const call of response.toolCalls) {
-      const result = await executeTool(call, input.sessionId);
+      const result = await executeTool(call, input.sessionId, input.universe ?? null);
       results.push({ toolUseId: call.id, content: JSON.stringify(result.result) });
       for (const ev of result.events) yield ev;
     }
@@ -311,35 +266,12 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
   yield { type: 'done' };
 }
 
-// --- Zod schemas for every tool input --------------------------------------
-// The LLM produces these inputs. We validate before trusting them, so a
-// hallucinated or prompt-injected payload can't reach the DB.
+// --- Narrator-only tool schemas --------------------------------------------
+// Shared schemas (rollSchema, applyConditionSchema, passTurnSchema) live in
+// tool-executors.ts and are imported above.
 
-const ROLL_KINDS = [
-  'attack',
-  'damage',
-  'heal',
-  'save',
-  'check',
-  'initiative',
-  'concentration',
-] as const;
-const ADVANTAGE = ['normal', 'advantage', 'disadvantage'] as const;
 const ENTITY_KINDS = ['npc', 'location', 'faction', 'item', 'quest', 'event'] as const;
 const ITEM_TYPES = ['weapon', 'armor', 'tool', 'consumable', 'treasure', 'misc'] as const;
-
-const rollSchema = z.object({
-  kind: z.enum(ROLL_KINDS),
-  label: z.string().trim().min(1).max(80),
-  dice: z.string().regex(/^\s*\d*d(4|6|8|10|12|20|100)(\s*[+-]\s*\d+)?\s*$/i),
-  dc: z.number().int().min(1).max(40).optional(),
-  target_ac: z.number().int().min(1).max(40).optional(),
-  advantage: z.enum(ADVANTAGE).optional(),
-  // When kind='damage' and target_combatant_id is provided, the server
-  // applies the damage total automatically — the GM doesn't need a
-  // separate apply_damage call. Positive total = damage, negative = heal.
-  target_combatant_id: z.string().min(1).max(128).optional(),
-});
 
 const recallSchema = z.object({ query: z.string().min(1).max(200) });
 
@@ -369,13 +301,6 @@ const startCombatSchema = z.object({
 const applyDamageSchema = z.object({
   combatant_id: combatantIdSchema,
   amount: z.number().int().min(-999).max(999),
-});
-
-const applyConditionSchema = z.object({
-  combatant_id: combatantIdSchema,
-  condition: z.enum(CONDITION_TYPES as unknown as [string, ...string[]]),
-  add: z.boolean(),
-  duration_rounds: z.number().int().min(1).max(100).optional(),
 });
 
 const grantItemSchema = z.object({
@@ -419,28 +344,10 @@ const triggerRestSchema = z.object({
   kind: z.enum(['short', 'long']),
 });
 
-/**
- * Parse an LLM-provided tool input with Zod. Returns the parsed value or an
- * error payload that can be fed back to the LLM without crashing the turn.
- */
-function parseToolInput<T>(
-  schema: z.ZodType<T>,
-  raw: unknown,
-): { ok: true; data: T } | { ok: false; result: unknown } {
-  const parsed = schema.safeParse(raw);
-  if (parsed.success) return { ok: true, data: parsed.data };
-  return {
-    ok: false,
-    result: {
-      error: 'Invalid tool input',
-      details: parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}: ${i.message}`),
-    },
-  };
-}
-
 async function executeTool(
   block: ToolCallOut,
   sessionId: string,
+  universe: Universe | null,
 ): Promise<{ result: unknown; events: GmEvent[] }> {
   switch (block.name) {
     case 'request_roll': {
@@ -544,7 +451,7 @@ async function executeTool(
       if (!(await characterInSession(sessionId, input.character_id))) {
         return { result: { error: 'Cible hors campagne' }, events: [] };
       }
-      return executeCompanion(input, sessionId);
+      return executeCompanion(input, sessionId, universe);
     }
     case 'start_combat': {
       const p = parseToolInput(startCombatSchema, block.input);
@@ -601,35 +508,38 @@ async function executeTool(
       const events: GmEvent[] = [];
       if (dmg.state) events.push({ type: 'combat_state', state: dmg.state });
       // After NPC damage, give the cursor a chance to advance (skip dead, auto-end).
+      let lastState: CombatState | null = dmg.state ?? null;
       const targetEntry = dmg.state?.participants.find((p) => p.id === input.combatant_id);
       if (targetEntry?.kind === 'npc' && targetEntry.currentHP <= 0) {
         const adv = await advanceUntilNextActor(sessionId);
-        if (adv.state) events.push({ type: 'combat_state', state: adv.state });
+        if (adv.state) {
+          events.push({ type: 'combat_state', state: adv.state });
+          lastState = adv.state;
+        }
         if (adv.ended) events.push({ type: 'combat_ended' });
       }
       return {
-        result: { ok: true, current_hp: dmg.currentHP, max_hp: dmg.maxHP },
+        result: {
+          ok: true,
+          current_hp: dmg.currentHP,
+          max_hp: dmg.maxHP,
+          next_actor: nextActorInfo(lastState),
+        },
         events,
       };
     }
     case 'apply_condition': {
       const p = parseToolInput(applyConditionSchema, block.input);
       if (!p.ok) return { result: p.result, events: [] };
-      const input = { ...p.data, condition: p.data.condition as ConditionType };
-      if (!(await combatantBelongsToSession(sessionId, input.combatant_id))) {
-        return { result: { error: 'Cible hors campagne' }, events: [] };
-      }
-      const cond = await applyConditionToParticipant(
-        sessionId,
-        input.combatant_id,
-        input.condition,
-        input.add,
-        input.duration_rounds,
-      );
-      if (!cond.ok) return { result: { error: cond.error }, events: [] };
-      const events: GmEvent[] = [];
-      if (cond.state) events.push({ type: 'combat_state', state: cond.state });
-      return { result: { ok: true }, events };
+      return executeApplyCondition(sessionId, {
+        ...p.data,
+        condition: p.data.condition as ConditionType,
+      });
+    }
+    case 'pass_turn': {
+      const p = parseToolInput(passTurnSchema, block.input);
+      if (!p.ok) return { result: p.result, events: [] };
+      return executePassTurn(sessionId);
     }
     default:
       return { result: { error: `Unknown tool: ${block.name}` }, events: [] };
@@ -706,13 +616,8 @@ function buildSystemPrompt(
   const memoryBlock = buildMemoryBlock(knownEntities ?? []);
   const combatBlock = renderCombatBlock(combatState ?? null);
 
-  // Build universe-specific system prompt
-  const basePrompt =
-    effectiveUniverse === 'witcher'
-      ? GM_SYSTEM_PROMPT_WITCHER
-      : effectiveUniverse === 'naheulbeuk'
-        ? GM_SYSTEM_PROMPT_NAHEULBEUK
-        : GM_SYSTEM_PROMPT;
+  // Build universe-specific system prompt from centralized config
+  const basePrompt = getGmPrompt(effectiveUniverse);
 
   return `${basePrompt}
 ${worldBlock}${rollingBlock}${memoryBlock}${combatBlock}
@@ -722,69 +627,12 @@ ${partyLines.join('\n')}
 Quand un compagnon est présent, pense à lui laisser la parole régulièrement via prompt_companion — décris une scène, puis passe-lui le micro (indique character_id et éventuellement un hint).`;
 }
 
-const GM_SYSTEM_PROMPT_WITCHER = `Tu es "Le Conteur", MJ d'une partie dans l'univers de The Witcher. Style sombre et réaliste, français, 3-6 phrases par tour, pas de markdown, pas d'emojis. Format texte brut UNIQUEMENT — la SEULE balise autorisée est <em>…</em> pour les paroles de PNJ. Aucune autre balise HTML. Théâtre de l'esprit.
 
-Règles Witcher : utilise les termes adaptés — sorceleurs (guerriers-mages), sources (magie du chaos), signes (sorts), potions, alchimie, contrats de chasse. Les races : humains, elfes, nains, demi-elfes, halflings. Pas de classes D&D traditionnelles : les personnages sont des sorceleurs, mages, voleurs, éclaireurs, guerriers, etc.
-
-RÈGLE CRITIQUE — Outils : tu disposes d'outils (request_roll, start_combat, apply_damage, apply_condition, prompt_companion, grant_item, adjust_currency, trigger_rest, record_entity, recall_memory). Tu les invoques UNIQUEMENT via le canal tool_calls structuré. N'écris JAMAIS leur nom dans la narration en prose. Si tu as besoin d'un outil, émets un tool_call ; sinon raconte simplement la scène.
-
-Combat — pilotage SERVEUR : le serveur enchaîne automatiquement les tours (skip des combattants à 0 PV inclus) et termine la rencontre quand tous les ennemis sont à terre. Pas d'outil "tour suivant" ni "fin de combat". Sur ton tour ou celui d'un PNJ : narre, lance le jet via tool_call, c'est tout.
-
-Jets de dés : TOUJOURS via l'outil de jet avant de décrire l'issue. Jamais "Fais un jet" / "Lance un dé" / "Jette les dés" en texte.
-
-Chaîne attaque → dégâts : sur touche/crit, enchaîne IMMÉDIATEMENT un jet de dégâts (kind="damage", target_combatant_id=<UUID cible>) via tool_call. Le serveur applique automatiquement. Sur crit, double les dés d'arme.
-
-Soins : kind="heal" + target_combatant_id pour faire remonter les PV.
-
-PV & états : utilise les outils dégâts/conditions. Ne JAMAIS écrire les PV en texte.
-
-Tours en combat (bloc "Combat actif" présent) :
-- Tour PNJ : action, jet d'attaque (target_ac, target_combatant_id), dégâts si touche, narre. Le serveur enchaîne.
-- Tour PJ : résous s'il a parlé, sinon décris et attends son input.
-- Tour compagnon : donne-lui la parole via l'outil. Le serveur enchaîne.
-- Cible à 0 PV : narre sa chute. Le serveur saute le tour et termine quand tous les PNJ sont à 0.
-
-Magie : les "signes" sont la magie des sorceleurs. Pas de sorts traditionnels D&D — utilise des actions descriptives.
-
-Butin : narre librement qui ramasse/donne/dépense — un concierge post-tour met à jour bourses et inventaires.
-
-Ne résume pas l'action du joueur — enchaîne sur les conséquences. Conclus souvent par "Que fais-tu ?".`;
-
-const GM_SYSTEM_PROMPT_NAHEULBEUK = `Tu es "Le Conteur", MJ d'une partie en Terre de Fangh (univers du Donjon de Naheulbeuk). Style COMÉDIQUE, parodique, BIENVEILLANT, français, 3-6 phrases par tour, pas de markdown, pas d'emojis, italique <em>…</em> pour les paroles de PNJ. Théâtre de l'esprit.
-
-TON. Les PJ sont des bras cassés héroïques, pas des élus du destin. Récompense l'échec drôle (narre l'échec avec emphase, c'est un cadeau). Refuse le pathos — pas de morts héroïques tragiques. Préfère la défaite humiliante à la mort. Multiplie les PNJ ridicules, donne-leur des accents (ogres mâcheurs, gobelins zézayeurs, elfes prétentieux, nains qui rotent). Le quotidien (payer un repas, négocier une chambre, marchander) est matière à roleplay. Inventer des dieux mineurs au pied levé est encouragé ("Plouf, dieu des ricochets, tu peux le prier").
-
-Univers. Année 1042. Royaumes : Waldorg-la-Verticale, Glargh, Mortebranche, Côte des Ogres (Alaykjdu), Pics Givrants (forteresses naines). Lieu canonique : Auberge de la Truie qui File (Maître Bouldegom, Suzanne la servante). Antagoniste récurrent : Zangdar le Sorcier (Donjon de Naheulbeuk, allergique à la mauvaise musique). Sbire : Reivax (bègue, lâche). Panthéon ridicule : Reuk (Père-Tout-Puissant), Hashpout (Moisson), Brorne (Forge), Crôm (Saoulard), Gladeulfeurha (Beauté Discutable), Dlul (Sommeil), Mankdebol (Loose), Ouilff (Chaussettes Dépareillées), Khel (Bons Conseils), Slanoush (Putréfaction). Magie : peut foirer (Table des Foirages : grenouille apparue dans la poche, voix de canard, cheveux qui blanchissent, etc.).
-
-RÈGLE CRITIQUE — Outils : tu disposes d'outils (request_roll, start_combat, apply_damage, apply_condition, prompt_companion, grant_item, adjust_currency, cast_spell, trigger_rest, record_entity, recall_memory). Tu les invoques UNIQUEMENT via le canal tool_calls structuré. N'écris JAMAIS leur nom dans la narration en prose. Si tu as besoin d'un outil, émets un tool_call ; sinon raconte simplement la scène.
-
-Combat — pilotage SERVEUR : le serveur enchaîne automatiquement les tours (skip des combattants à 0 PV inclus) et termine la rencontre quand tous les ennemis sont à terre. Pas d'outil "tour suivant" ni "fin de combat". Sur ton tour ou celui d'un PNJ : narre, lance le jet via tool_call, c'est tout.
-
-Jets de dés : TOUJOURS via l'outil de jet avant de décrire l'issue. Jamais "Fais un jet" / "Lance un dé" / "Jette les dés" en texte.
-
-Chaîne attaque → dégâts : sur touche/crit, enchaîne IMMÉDIATEMENT un jet de dégâts (kind="damage", target_combatant_id=<UUID cible>) via tool_call. Le serveur applique automatiquement. Sur crit, double les dés d'arme. Nat 20 = critique, nat 1 = complication ridicule (l'arme glisse, un parchemin tombe, etc.).
-
-Soins : kind="heal" + target_combatant_id pour faire remonter les PV.
-
-PV & états : utilise les outils dégâts/conditions. Ne JAMAIS écrire les PV en texte.
-
-Tours en combat (bloc "Combat actif" présent) :
-- Tour PNJ : action, jet d'attaque (target_ac, target_combatant_id), dégâts si touche, narre. Le serveur enchaîne.
-- Tour PJ : résous s'il a parlé, sinon décris et attends son input.
-- Tour compagnon : donne-lui la parole via l'outil compagnon. Le serveur enchaîne.
-- Cible à 0 PV : narre sa chute (style Naheulbeuk : glissade ridicule, KO parce qu'a glissé sur du sang gobelin). Le serveur saute le tour et termine quand tous les PNJ sont à 0.
-
-Magie/repos : utilise les outils dédiés pour consommer un emplacement de sort ou déclencher un repos.
-
-Butin : narre librement qui ramasse/donne/dépense quoi — un concierge post-tour met à jour bourses et inventaires. Coffres typiques : 2d6 PO + un chausson dépareillé, un pot de cornichons, une perruque rousse.
-
-Jurons utiles : "Par les couilles de Reuk", "Par la barbe de Brorne", "Krwallak", "Tonnerre de Khornettoh", "Foutre de magicien raté".
-
-Ne résume pas l'action du joueur — enchaîne sur les conséquences. Conclus souvent par "Que faites-vous ?" (la Compagnie compte 6-7 bras cassés, parle au pluriel quand pertinent).`;
 
 async function executeCompanion(
   input: { character_id: string; hint?: string },
   sessionId: string,
+  universe: Universe | null,
 ): Promise<{ result: unknown; events: GmEvent[] }> {
   const supabase = createSupabaseServiceClient();
   const { data: character } = await supabase
@@ -809,6 +657,7 @@ async function executeCompanion(
     hint: input.hint,
     combatState: compState,
     combatBlock,
+    universe,
     executeRoll,
   });
   const events: GmEvent[] = [...turn.events];
@@ -824,166 +673,6 @@ async function executeCompanion(
     result: { said: turn.text || '(silence)' },
     events,
   };
-}
-
-export async function executeRoll(
-  input: RequestRollInput,
-  sessionId: string,
-): Promise<{ result: unknown; events: GmEvent[] }> {
-  const advantage = input.advantage ?? 'normal';
-  const roll = resolveRoll(input, advantage);
-  const supabase = createSupabaseServiceClient();
-  const { data } = await supabase
-    .from('dice_rolls')
-    .insert({
-      session_id: sessionId,
-      roll_kind: mapRollKind(input.kind),
-      expression: input.dice,
-      raw_dice: roll.dice,
-      modifier: roll.modifier,
-      total: roll.total,
-      advantage,
-      dc: input.dc ?? null,
-      target_ac: input.target_ac ?? null,
-      outcome: roll.outcome,
-      context: { label: input.label },
-    })
-    .select('*')
-    .single();
-
-  const record: DiceRollRecord = {
-    id: data?.id,
-    kind: input.kind,
-    label: input.label,
-    expression: input.dice,
-    dice: roll.dice,
-    modifier: roll.modifier,
-    total: roll.total,
-    outcome: roll.outcome,
-    advantage,
-    ...(input.dc !== undefined ? { dc: input.dc } : {}),
-    ...(input.target_ac !== undefined ? { targetAC: input.target_ac } : {}),
-  };
-  const events: GmEvent[] = [
-    {
-      type: 'dice_request',
-      rollId: data?.id ?? 'local',
-      roll: record,
-      label: input.label,
-    },
-  ];
-
-  // Auto-apply damage / heal when the GM targeted a combatant. Routes through
-  // applyDamageToParticipant which handles both NPC (jsonb) and PC (characters
-  // row, source of truth) cases. Tenant-guarded so a hallucinated UUID can't
-  // touch another campaign.
-  let applied: { target: string; newHp?: number; mode?: 'damage' | 'heal' } | null = null;
-  const applyable =
-    (input.kind === 'damage' || input.kind === 'heal') &&
-    input.target_combatant_id &&
-    roll.total !== 0;
-  if (applyable) {
-    const targetId = input.target_combatant_id as string;
-    if (await combatantBelongsToSession(sessionId, targetId)) {
-      try {
-        const signed = input.kind === 'heal' ? -roll.total : roll.total;
-        const res = await applyDamageToParticipant(sessionId, targetId, signed);
-        if (res.ok) {
-          applied = {
-            target: targetId,
-            newHp: res.currentHP,
-            mode: input.kind as 'damage' | 'heal',
-          };
-          if (res.state) events.push({ type: 'combat_state', state: res.state });
-        } else if (process.env.NODE_ENV !== 'production') {
-          console.warn(`[gm.${input.kind}] auto-apply rejected`, res.error);
-        }
-      } catch (err) {
-        if (process.env.NODE_ENV !== 'production') {
-          console.warn(`[gm.${input.kind}] auto-apply failed`, err);
-        }
-      }
-    } else if (process.env.NODE_ENV !== 'production') {
-      console.warn(`[gm.${input.kind}] target ${targetId} not in session — not applied`);
-    }
-  }
-
-  // Server-authoritative turn advance. The active actor's turn ends after:
-  //   • a damage or heal roll (the action's resolution roll), OR
-  //   • an attack roll that misses (no follow-up damage will come).
-  // Hits don't advance — the GM chains a damage roll which then advances. Saves
-  // and skill checks don't advance (they're side-rolls during a broader turn).
-  // advanceUntilNextActor is a safe no-op when no encounter is active.
-  const finishesTurn =
-    input.kind === 'damage' ||
-    input.kind === 'heal' ||
-    (input.kind === 'attack' && roll.outcome === 'miss');
-  if (finishesTurn) {
-    try {
-      const adv = await advanceUntilNextActor(sessionId);
-      if (adv.state) events.push({ type: 'combat_state', state: adv.state });
-      if (adv.ended) events.push({ type: 'combat_ended' });
-    } catch (err) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn('[gm.advance] auto-advance failed', err);
-      }
-    }
-  }
-
-  return {
-    result: {
-      total: roll.total,
-      dice: roll.dice,
-      outcome: roll.outcome,
-      label: input.label,
-      ...(applied ? { applied } : {}),
-    },
-    events,
-  };
-}
-
-function resolveRoll(
-  input: RequestRollInput,
-  advantage: 'normal' | 'advantage' | 'disadvantage',
-): { dice: number[]; modifier: number; total: number; outcome: string | null } {
-  const parsed = parseDiceExpression(input.dice);
-  if (
-    parsed.faces === 20 &&
-    parsed.count === 1 &&
-    input.kind !== 'damage' &&
-    input.kind !== 'heal'
-  ) {
-    const d20 = rollD20(parsed.modifier, advantage);
-    const nat = d20.roll;
-    const outcome =
-      input.kind === 'attack'
-        ? nat === 20
-          ? 'crit'
-          : nat === 1
-            ? 'fumble'
-            : input.target_ac !== undefined && d20.total >= input.target_ac
-              ? 'hit'
-              : 'miss'
-        : input.dc !== undefined
-          ? d20.total >= input.dc
-            ? 'success'
-            : 'failure'
-          : null;
-    return {
-      dice: d20.rawRolls,
-      modifier: parsed.modifier,
-      total: d20.total,
-      outcome,
-    };
-  }
-  const r = rollExpression(input.dice);
-  return { dice: r.dice, modifier: r.modifier, total: r.total, outcome: null };
-}
-
-function mapRollKind(
-  kind: RequestRollInput['kind'],
-): 'attack' | 'damage' | 'heal' | 'save' | 'check' | 'initiative' | 'concentration' {
-  return kind;
 }
 
 /**
