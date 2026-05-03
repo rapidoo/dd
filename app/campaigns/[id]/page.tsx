@@ -3,9 +3,14 @@ import { notFound } from 'next/navigation';
 import { BtnPrimary } from '../../../components/ui/button';
 import { Stat } from '../../../components/ui/stat';
 import { createSupabaseServerClient } from '../../../lib/db/server';
-import type { CharacterRow, SessionRow } from '../../../lib/db/types';
+import type { CharacterRow, SessionRow, Universe } from '../../../lib/db/types';
 import { getModuleTemplate } from '../../../lib/modules/templates';
-import { getClassesForUniverse, getSpeciesForUniverse, CLASSES, SPECIES } from '../../../lib/rules/srd';
+import {
+  CLASSES,
+  getClassesForUniverse,
+  getSpeciesForUniverse,
+  SPECIES,
+} from '../../../lib/rules/srd';
 import { requireUser } from '../../../lib/server/auth';
 import { getCampaign } from '../../../lib/server/campaigns';
 
@@ -144,11 +149,11 @@ function CharactersSection({
   title: string;
   empty: string;
   list: CharacterRow[];
-  universe: 'dnd5e' | 'witcher';
+  universe: Universe;
 }) {
   const classes = getClassesForUniverse(universe);
   const species = getSpeciesForUniverse(universe);
-  
+
   return (
     <section>
       <h2 className="mb-3 font-display text-sm uppercase tracking-[0.3em] text-gold">{title}</h2>

@@ -7,6 +7,10 @@ import { Stat } from '../../../../../components/ui/stat';
 import type { CharacterRow, Universe } from '../../../../../lib/db/types';
 import { deriveCharacter } from '../../../../../lib/rules/derivations';
 import {
+  getNaheulbeukTemplates,
+  type NaheulbeukCharacterTemplate,
+} from '../../../../../lib/rules/naheulbeuk-templates';
+import {
   getClassesForUniverse,
   getClassOptions,
   getSpeciesOptions,
@@ -66,9 +70,12 @@ export function NewCharacterForm({
   const classOptions = getClassOptions(universe);
   const speciesOptions = getSpeciesOptions(universe);
 
-  // Templates are only available for The Witcher universe
+  // Templates available for The Witcher and Naheulbeuk universes
   const witcherTemplates = getWitcherTemplates();
-  const [selectedTemplate, setSelectedTemplate] = useState<WitcherCharacterTemplate | null>(null);
+  const naheulbeukTemplates = getNaheulbeukTemplates();
+  const [selectedTemplate, setSelectedTemplate] = useState<
+    WitcherCharacterTemplate | NaheulbeukCharacterTemplate | null
+  >(null);
 
   // Default to first available class and species for the universe
   const [classId, setClassId] = useState(classOptions[0]?.id ?? 'fighter');
@@ -96,20 +103,23 @@ export function NewCharacterForm({
       setSpeciesId(speciesOptions[0]?.id ?? '');
     }
     setSkills([]);
-    if (universe !== 'witcher') {
+    if (universe !== 'witcher' && universe !== 'naheulbeuk') {
       setSelectedTemplate(null);
     }
   }, [universe, classOptions, speciesOptions, classId, speciesId]);
 
-  // Apply a Witcher template's stats/skills when selected.
+  // Apply a Witcher / Naheulbeuk template's stats/skills when selected.
   useEffect(() => {
     if (!selectedTemplate) return;
-    const templateSpecies = speciesOptions.find(
-      (s) => s.name.toLowerCase() === selectedTemplate.species.toLowerCase(),
-    );
-    const templateClass = classOptions.find(
-      (c) => c.name.toLowerCase() === selectedTemplate.class.toLowerCase(),
-    );
+    // Template species/class can be either the SRD id ('human', 'rogue') or
+    // the display name ('Humain', 'Roublard') depending on the template.
+    // Match by id first, fall back to name (case-insensitive).
+    const templateSpecies =
+      speciesOptions.find((s) => s.id === selectedTemplate.species) ??
+      speciesOptions.find((s) => s.name.toLowerCase() === selectedTemplate.species.toLowerCase());
+    const templateClass =
+      classOptions.find((c) => c.id === selectedTemplate.class) ??
+      classOptions.find((c) => c.name.toLowerCase() === selectedTemplate.class.toLowerCase());
     if (templateSpecies) setSpeciesId(templateSpecies.id);
     if (templateClass) setClassId(templateClass.id);
     setAbilities({
@@ -212,6 +222,7 @@ export function NewCharacterForm({
           >
             <option value="dnd5e">Donjons & Dragons 5e</option>
             <option value="witcher">The Witcher</option>
+            <option value="naheulbeuk">Donjon de Naheulbeuk</option>
           </select>
         </label>
       )}
@@ -224,6 +235,67 @@ export function NewCharacterForm({
           </p>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {witcherTemplates.map((template) => {
+              const isSelected = selectedTemplate?.id === template.id;
+              return (
+                <button
+                  key={template.id}
+                  type="button"
+                  onClick={() => setSelectedTemplate(isSelected ? null : template)}
+                  className={`flex flex-col gap-2 rounded-lg border p-4 text-left transition-all ${
+                    isSelected
+                      ? 'border-gold bg-[rgba(212,166,76,0.1)]'
+                      : 'border-line bg-transparent hover:border-gold'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-narr text-lg font-bold text-gold-bright">
+                      {template.name}
+                    </span>
+                    <span className="text-xs text-text-mute">Niv. {template.level}</span>
+                  </div>
+                  <p className="text-xs text-text-mute line-clamp-2">{template.description}</p>
+                  <div className="flex gap-2 text-xs">
+                    <span className="rounded bg-[rgba(0,0,0,0.4)] px-2 py-1 text-text-faint">
+                      {template.species}
+                    </span>
+                    <span className="rounded bg-[rgba(0,0,0,0.4)] px-2 py-1 text-text-faint">
+                      {template.class}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {selectedTemplate && (
+            <div className="mt-4 flex items-center justify-between">
+              <p className="text-sm text-text-mute">
+                Modèle sélectionné :{' '}
+                <span className="font-bold text-gold">{selectedTemplate.name}</span>
+              </p>
+              <button
+                type="button"
+                onClick={() => setSelectedTemplate(null)}
+                className="text-sm text-text-mute hover:text-gold transition-colors"
+              >
+                Annuler
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Naheulbeuk Character Templates — la Compagnie d'Aventuriers */}
+      {universe === 'naheulbeuk' && (
+        <section className="border border-line bg-card p-4">
+          <p className="mb-3 font-display text-sm uppercase tracking-[0.3em] text-gold">
+            🍺 La Compagnie d'Aventuriers
+          </p>
+          <p className="mb-3 text-xs text-text-mute">
+            Pioche un membre canonique de la Compagnie. Tu hérites de ses stats, son tic de langage
+            et son juron favori.
+          </p>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {naheulbeukTemplates.map((template) => {
               const isSelected = selectedTemplate?.id === template.id;
               return (
                 <button

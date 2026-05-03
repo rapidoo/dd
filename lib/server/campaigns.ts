@@ -13,7 +13,7 @@ const createSchema = z.object({
   settingMode: z.enum(['homebrew', 'module', 'generated']),
   settingPitch: z.string().max(2000).optional().nullable(),
   moduleId: z.string().max(120).optional().nullable(),
-  universe: z.enum(['dnd5e', 'witcher']).default('dnd5e'),
+  universe: z.enum(['dnd5e', 'witcher', 'naheulbeuk']).default('dnd5e'),
 });
 
 export type CreateCampaignInput = z.infer<typeof createSchema>;
@@ -67,37 +67,46 @@ export async function createCampaign(
   // Seed the world summary from the template / pitch so the GM has context.
   const pitch = parsed.data.settingPitch?.trim() ?? '';
   const universe = parsed.data.universe;
-  const isWitcher = universe === 'witcher';
 
   // Universe-specific system prefix
-  const universePrefix = isWitcher
-    ? `Contexte Witcher : Tu es le Conteur dans un univers inspiré de The Witcher (Continent, écoles de sorciers, monstres, alchimie, politique entre royaumes). Utilise des termes Witcher : sorceleurs, sources, potions, signes, contrats, chaos. Les races incluent humains, elfes, nains, et demi-elfes. Les classes traditionnelles D&D sont adaptées : "Sorceleur" (guerrier/mage), "Mage" (utilise la magie des Signes), "Voleur/Éclaireur", etc.`
-    : '';
+  const universePrefix =
+    universe === 'witcher'
+      ? `Contexte Witcher : Tu es le Conteur dans un univers inspiré de The Witcher (Continent, écoles de sorciers, monstres, alchimie, politique entre royaumes). Utilise des termes Witcher : sorceleurs, sources, potions, signes, contrats, chaos. Les races incluent humains, elfes, nains, et demi-elfes. Les classes traditionnelles D&D sont adaptées : "Sorceleur" (guerrier/mage), "Mage" (utilise la magie des Signes), "Voleur/Éclaireur", etc.`
+      : universe === 'naheulbeuk'
+        ? `Contexte Naheulbeuk : Tu es le Conteur en Terre de Fangh, univers parodique de fantasy classique tellement classique qu'il en devient un cliché ambulant. Royaumes (Waldorg, Glargh, Mortebranche, Côte des Ogres), donjons à couloirs en équerre, gobelins de garde, squelettes en pause syndicale, ogres affamés, elfes snobs, nains alcooliques, magie qui foire un coup sur deux, panthéon ridicule (Reuk, Hashpout, Brorne, Crôm, Dlul, Mankdebol, Ouilff dieu des chaussettes dépareillées). Ton COMÉDIQUE et BIENVEILLANT : les PJ sont des bras cassés héroïques, pas des élus du destin. Récompense l'échec drôle, refuse le pathos, multiplie les PNJ ridicules, fais parler les PNJ avec accent (ogres mâcheurs, gobelins zézayeurs, elfes prétentieux). Lieu canonique : Auberge de la Truie qui File (Maître Bouldegom). Méchant récurrent : Zangdar le Sorcier (allergique à la mauvaise musique). Donjon-titre : Donjon de Naheulbeuk (Statuette de Gladeulfeurha). Année : 1042. NE TUE PAS les PJ : préfère la défaite humiliante à la mort.`
+        : '';
 
   const modePrefix = `Mode: ${parsed.data.settingMode === 'module' ? 'module pré-écrit' : parsed.data.settingMode === 'homebrew' ? 'homebrew' : 'généré'}.`;
+
+  const hasUniversePrefix = universePrefix.length > 0;
 
   let worldSummary: string | null = null;
   if (template) {
     const templateSummary = `${template.title} — ${template.tagline}\n\n${template.summary}\n\nNiveaux: ${template.levelRange} · Difficulté: ${template.difficulty} · Tons: ${template.tones.join(', ')}\nÉquipe conseillée: ${template.recommendedParty}\n\n`;
-    worldSummary = isWitcher
+    worldSummary = hasUniversePrefix
       ? `${universePrefix}\n\n${templateSummary}${modePrefix} Reste fidèle au pitch ci-dessus.`
       : `${templateSummary}${modePrefix} Reste fidèle au pitch ci-dessus et à l'univers décrit.`;
   } else if (parsed.data.settingMode === 'homebrew' && pitch) {
     const baseSummary = `Univers décrit par le joueur :\n${pitch}\n\n`;
-    worldSummary = isWitcher
+    worldSummary = hasUniversePrefix
       ? `${universePrefix}\n\n${baseSummary}${modePrefix} RESPECTE la description du joueur à la lettre.`
       : `${baseSummary}${modePrefix} RESPECTE la description du joueur à la lettre. N'invente pas de lieux, PNJ ou ambiances qui contrediraient ses indications. Si un détail manque, demande-lui avant de décider.`;
   } else if (parsed.data.settingMode === 'generated') {
-    worldSummary = isWitcher
-      ? `${universePrefix}\n\nThème de départ donné par le joueur :\n${pitch || '(aucun, improvise un thème Witcher)'}\n\n${modePrefix} Tu as carte blanche pour inventer lieux, factions, PNJ et premier accrochage à partir de ce thème. Commence la toute première session par une scène d'ouverture immersive et mémorable, puis laisse le joueur réagir.`
-      : `Thème de départ donné par le joueur :\n${pitch || '(aucun, improvise un thème cozy dark fantasy)'}\n\n${modePrefix} Tu as carte blanche pour inventer lieux, factions, PNJ et premier accroche à partir de ce thème. Commence la toute première session par une scène d'ouverture immersive et mémorable, puis laisse le joueur réagir.`;
+    const themeFallback =
+      universe === 'witcher'
+        ? '(aucun, improvise un thème Witcher)'
+        : universe === 'naheulbeuk'
+          ? "(aucun, improvise un contrat de bras cassés à l'Auberge de la Truie qui File)"
+          : '(aucun, improvise un thème cozy dark fantasy)';
+    const baseSummary = `Thème de départ donné par le joueur :\n${pitch || themeFallback}\n\n${modePrefix} Tu as carte blanche pour inventer lieux, factions, PNJ et premier accrochage à partir de ce thème. Commence la toute première session par une scène d'ouverture immersive et mémorable, puis laisse le joueur réagir.`;
+    worldSummary = hasUniversePrefix ? `${universePrefix}\n\n${baseSummary}` : baseSummary;
   } else if (pitch) {
-    worldSummary = isWitcher ? `${universePrefix}\n\n${pitch}` : pitch;
+    worldSummary = hasUniversePrefix ? `${universePrefix}\n\n${pitch}` : pitch;
   }
 
   const user = await requireUser();
   const supabase = await createSupabaseServerClient();
-  
+
   // Try inserting with universe column first
   let { data, error } = await supabase
     .from('campaigns')
@@ -112,7 +121,7 @@ export async function createCampaign(
     })
     .select('*')
     .single();
-  
+
   // Fallback: if universe column doesn't exist yet, insert without it
   // This handles the case where the migration hasn't been applied yet
   if (error && error.message?.includes("Could not find the 'universe' column")) {
@@ -131,7 +140,7 @@ export async function createCampaign(
     data = fallbackData;
     error = fallbackError;
   }
-  
+
   if (error || !data) {
     return { ok: false, error: error?.message ?? 'Création impossible' };
   }
@@ -142,7 +151,11 @@ export async function createCampaign(
 export async function getCampaign(id: string): Promise<CampaignRow | null> {
   await requireUser();
   const supabase = await createSupabaseServerClient();
-  const { data } = await supabase.from('campaigns').select('*').eq('id', id).maybeSingle<CampaignRow>();
+  const { data } = await supabase
+    .from('campaigns')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle<CampaignRow>();
   if (!data) return null;
   // Ensure universe is always set (for backward compatibility with DB without the column)
   if (!data.universe) {

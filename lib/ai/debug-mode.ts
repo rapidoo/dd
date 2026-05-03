@@ -33,8 +33,8 @@ import {
   toggleCondition,
 } from '../server/combat';
 import { respondAsCompanion } from './companion-agent';
-import { executeRoll, renderCombatBlock } from './gm-agent';
 import type { DiceRollRecord, GmEvent } from './gm-agent';
+import { executeRoll, renderCombatBlock } from './gm-agent';
 
 export function isDebugCommand(message: string): boolean {
   return message.trim().startsWith('/debug');
