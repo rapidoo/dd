@@ -17,7 +17,7 @@ export type RollKind =
   | 'death_save'
   | 'concentration'
   | 'hit_die';
-export type SettingMode = 'homebrew' | 'module' | 'generated';
+export type SettingMode = 'homebrew' | 'module' | 'generated' | 'arena';
 export type Universe = 'dnd5e' | 'witcher' | 'naheulbeuk';
 export type CampaignStatus = 'active' | 'paused' | 'archived';
 export type EntityKind = 'npc' | 'location' | 'faction' | 'item' | 'quest' | 'event';

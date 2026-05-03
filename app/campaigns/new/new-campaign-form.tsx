@@ -6,8 +6,10 @@ import type { CampaignRow, Universe } from '../../../lib/db/types';
 import { getModulesByUniverse, MODULE_TEMPLATES } from '../../../lib/modules/templates';
 import { createCampaign, type ServerResult } from '../../../lib/server/campaigns';
 
+type Mode = 'homebrew' | 'module' | 'generated' | 'arena';
+
 const MODES: Array<{
-  value: 'homebrew' | 'module' | 'generated';
+  value: Mode;
   title: string;
   description: string;
   glyph: string;
@@ -32,6 +34,13 @@ const MODES: Array<{
       'Donne juste un thème court (« cité sous la glace »). Le Conteur invente le reste à partir de là.',
     glyph: '✧',
   },
+  {
+    value: 'arena',
+    title: "Arène d'entraînement",
+    description:
+      'Bac à sable combat pur. Pas d’histoire, pas de PNJ alliés — vagues d’ennemis enchaînées pour tester la mécanique.',
+    glyph: '⚔',
+  },
 ];
 
 export function NewCampaignForm() {
@@ -39,7 +48,7 @@ export function NewCampaignForm() {
     createCampaign,
     null,
   );
-  const [settingMode, setSettingMode] = useState<'homebrew' | 'module' | 'generated'>('homebrew');
+  const [settingMode, setSettingMode] = useState<Mode>('homebrew');
   const [moduleId, setModuleId] = useState<string | null>(null);
   const [universe, setUniverse] = useState<Universe>('dnd5e');
 
@@ -67,7 +76,7 @@ export function NewCampaignForm() {
 
       <fieldset className="flex flex-col gap-3">
         <legend className="text-xs uppercase tracking-[0.2em] text-text-mute">Type de monde</legend>
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
           {MODES.map((mode) => (
             <label
               key={mode.value}
@@ -203,7 +212,11 @@ export function NewCampaignForm() {
 
       {settingMode !== 'module' && (
         <label className="flex flex-col gap-1 text-xs uppercase tracking-[0.2em] text-text-mute">
-          {settingMode === 'homebrew' ? 'Description de ton univers' : 'Thème de départ'}
+          {settingMode === 'homebrew'
+            ? 'Description de ton univers'
+            : settingMode === 'arena'
+              ? 'Type d’ennemis (optionnel)'
+              : 'Thème de départ'}
           <textarea
             name="settingPitch"
             rows={settingMode === 'homebrew' ? 6 : 3}
@@ -212,7 +225,9 @@ export function NewCampaignForm() {
             placeholder={
               settingMode === 'homebrew'
                 ? "Décris les lieux, les factions, l'ambiance, les règles propres à ton monde. Le Conteur suivra ta description à la lettre."
-                : 'Ex. : « cité sous la glace dirigée par une guilde de marchands de rêves » — quelques mots suffisent.'
+                : settingMode === 'arena'
+                  ? 'Ex. : « gobelins, ogres, et un dragon final » ou « créatures Witcher : noyeurs, alghouls, leshen ». Laisse vide pour laisser le MJ choisir.'
+                  : 'Ex. : « cité sous la glace dirigée par une guilde de marchands de rêves » — quelques mots suffisent.'
             }
           />
         </label>

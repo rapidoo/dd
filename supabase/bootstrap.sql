@@ -422,3 +422,11 @@ comment on column public.combat_encounters.participants_order is
   'JSONB array of {id, kind: pc|companion|npc, initiative, dexMod} sorted by initiative DESC. Drives turn cursor.';
 comment on column public.combat_encounters.version is
   'Monotonic counter for optimistic concurrency control. Mutations bump it via CAS.';
+-- Arena mode — a campaign type optimized for combat testing. Drops the
+-- existing setting_mode check constraint and recreates it with the new value.
+alter table public.campaigns
+  drop constraint if exists campaigns_setting_mode_check;
+
+alter table public.campaigns
+  add constraint campaigns_setting_mode_check
+  check (setting_mode in ('homebrew', 'module', 'generated', 'arena'));

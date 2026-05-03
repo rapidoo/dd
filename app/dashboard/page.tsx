@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from '../../lib/db/server';
 import type { ProfileRow } from '../../lib/db/types';
 import { requireUser, signOut } from '../../lib/server/auth';
 import { listCampaigns } from '../../lib/server/campaigns';
+import { DeleteCampaignButton } from './delete-campaign-button';
 
 export default async function DashboardPage() {
   const user = await requireUser();
@@ -60,7 +61,8 @@ export default async function DashboardPage() {
         ) : (
           <ul className="grid gap-4 sm:grid-cols-2">
             {campaigns.map((c) => (
-              <li key={c.id}>
+              <li key={c.id} className="relative">
+                <DeleteCampaignButton campaignId={c.id} campaignName={c.name} />
                 <Link
                   href={`/campaigns/${c.id}`}
                   className="block border border-line bg-card p-5 transition-colors hover:border-gold"
@@ -87,10 +89,15 @@ export default async function DashboardPage() {
   );
 }
 
-function modeLabel(mode: 'homebrew' | 'module' | 'generated'): string {
-  return mode === 'homebrew'
-    ? 'Monde libre'
-    : mode === 'module'
-      ? 'Module pré-écrit'
-      : 'Monde généré';
+function modeLabel(mode: 'homebrew' | 'module' | 'generated' | 'arena'): string {
+  switch (mode) {
+    case 'homebrew':
+      return 'Monde libre';
+    case 'module':
+      return 'Module pré-écrit';
+    case 'generated':
+      return 'Monde généré';
+    case 'arena':
+      return "Arène d'entraînement";
+  }
 }

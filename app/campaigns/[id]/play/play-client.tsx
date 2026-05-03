@@ -43,6 +43,13 @@ type DisplayMessage =
       id: string;
       time: string;
       card: DiceCardProps;
+    }
+  | {
+      kind: 'turn';
+      id: string;
+      round: number;
+      actorName: string;
+      actorKind: 'pc' | 'companion' | 'npc';
     };
 
 export function PlayClient({
@@ -61,6 +68,10 @@ export function PlayClient({
     initialMessages.map((m) => toDisplay(m, companionMap)),
   );
   const [combatState, setCombatState] = useState<CombatState | null>(null);
+  // Tracks the last actor we inserted a divider for, so we don't duplicate
+  // dividers when the same combat_state is re-emitted (e.g. condition tick
+  // without a real cursor move).
+  const currentActorRef = useRef<string | null>(null);
 
   async function refreshParty() {
     try {
@@ -77,7 +88,13 @@ export function PlayClient({
   // biome-ignore lint/correctness/useExhaustiveDependencies: sessionId is stable
   useEffect(() => {
     void getActiveCombat({ sessionId }).then((s) => {
-      if (s) setCombatState(s);
+      if (s) {
+        const cur = s.participants.find((p) => p.isCurrent);
+        // Seed the ref so we don't insert a spurious divider on the first
+        // mid-session SSE update for the same actor.
+        if (cur) currentActorRef.current = cur.id;
+        setCombatState(s);
+      }
     });
   }, []);
   const [input, setInput] = useState('');
@@ -210,10 +227,24 @@ export function PlayClient({
             if (data.phase === 'started') {
               // The accompanying `state` payload arrives on the very next event.
               // Optimistically clear any stale state so the tracker shows fresh.
+              currentActorRef.current = null;
               setCombatState(null);
             } else if (data.phase === 'state') {
+              const cur = data.state.participants.find((p) => p.isCurrent);
+              if (cur && cur.id !== currentActorRef.current) {
+                currentActorRef.current = cur.id;
+                const turnEntry: DisplayMessage = {
+                  kind: 'turn',
+                  id: `t-${Date.now()}-${cur.id}`,
+                  round: data.state.round,
+                  actorName: cur.name,
+                  actorKind: cur.kind,
+                };
+                setMessages((m) => [...m, turnEntry]);
+              }
               setCombatState(data.state);
             } else if (data.phase === 'ended') {
+              currentActorRef.current = null;
               setCombatState(null);
             }
             void refreshParty();
@@ -298,6 +329,13 @@ export function PlayClient({
               {messages.map((m) =>
                 m.kind === 'dice' ? (
                   <DiceCard key={m.id} {...m.card} />
+                ) : m.kind === 'turn' ? (
+                  <TurnDivider
+                    key={m.id}
+                    round={m.round}
+                    actorName={m.actorName}
+                    actorKind={m.actorKind}
+                  />
                 ) : (
                   <Message
                     key={m.id}
@@ -338,7 +376,7 @@ export function PlayClient({
                 }}
                 rows={2}
                 disabled={isPending || typing !== null}
-                placeholder="Décris ce que tu fais…"
+                placeholder={inputPlaceholder(combatState, player)}
                 className="flex-1 resize-none rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-base text-text outline-none focus:border-gold disabled:opacity-60"
               />
               <BtnPrimary
@@ -721,6 +759,47 @@ function statusLabel(c: CharacterRow): string {
   if (c.current_hp <= 0) return 'À TERRE';
   if (c.current_hp < c.max_hp / 2) return 'BLESSÉ';
   return 'PRÊT';
+}
+
+function TurnDivider({
+  round,
+  actorName,
+  actorKind,
+}: {
+  round: number;
+  actorName: string;
+  actorKind: 'pc' | 'companion' | 'npc';
+}) {
+  const kindGlyph = actorKind === 'npc' ? '✕' : actorKind === 'companion' ? '◉' : '✦';
+  const tone =
+    actorKind === 'npc' ? 'text-blood/80' : actorKind === 'pc' ? 'text-gold' : 'text-gold/70';
+  const prefix = /^[aeiouyâéèêîôûh]/i.test(actorName) ? "d'" : 'de ';
+  return (
+    <div className="my-4 flex items-center gap-3">
+      <span className="h-px flex-1 bg-line" />
+      <span
+        className={`font-display text-[10px] uppercase tracking-[0.3em] ${tone} flex items-center gap-2`}
+      >
+        <span aria-hidden>{kindGlyph}</span>
+        <span>
+          Round {round} · Tour {prefix}
+          {actorName}
+        </span>
+      </span>
+      <span className="h-px flex-1 bg-line" />
+    </div>
+  );
+}
+
+function inputPlaceholder(state: CombatState | null, player: CharacterRow | null): string {
+  if (!state) return 'Décris ce que tu fais…';
+  const cur = state.participants.find((p) => p.isCurrent);
+  if (!cur) return 'Décris ce que tu fais…';
+  if (cur.kind === 'pc') {
+    const name = player?.name ?? 'toi';
+    return `À ton tour, ${name} — que fais-tu ?`;
+  }
+  return `Tour de ${cur.name} — patiente ou interromps…`;
 }
 
 /**
