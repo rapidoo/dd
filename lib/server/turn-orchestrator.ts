@@ -65,7 +65,7 @@ export async function* runTurnLoop(input: TurnLoopInput): AsyncGenerator<Orchest
             trigger === 'companion_spoke'
               ? "(Un compagnon vient de parler ci-dessus. Réagis brièvement en tant que MJ : décris la réaction des autres autour du feu, ou enchaîne la scène, sans répéter ce qu'il a dit.)"
               : trigger === 'session_intro'
-                ? "(Début de session. Ouvre l'aventure en tant que MJ : pose le décor en 4-6 phrases (lieu, ambiance, ce que les sens captent), présente brièvement le PJ et les compagnons présents en t'appuyant sur leur fiche, puis lance un hook narratif (rumeur, croisement, événement) et termine par « Que fais-tu ? ». Ne décris pas un combat, ne lance pas de dés, ne demande pas l'intention pour des objets — c'est une ouverture narrative.)"
+                ? "(Début de session. Ouverture courte et atmosphérique : 2-3 phrases brèves pour planter le lieu et un détail sensoriel précis (odeur, son, lumière), évoque discrètement où se trouvent les compagnons SANS les présenter formellement (le joueur les connaît déjà — pas de récap de fiche). PAS de PNJ qui débarque, PAS de quête lancée, PAS de hook narratif lourd — tu poses juste le décor et tu laisses l'air au joueur. Termine par une invite ouverte (« Que fais-tu ? », « Par où commences-tu ? »). Ne lance ni combat ni dés.)"
                 : userMsg,
           history,
           player: input.player,
