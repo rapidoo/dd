@@ -66,9 +66,11 @@ export function NewCharacterForm({
   );
   // Allow override universe for testing before DB migration is applied
   const [universe, setUniverse] = useState<Universe>(campaignUniverse);
-  const classes = getClassesForUniverse(universe);
-  const classOptions = getClassOptions(universe);
-  const speciesOptions = getSpeciesOptions(universe);
+  // Memoize so identity is stable across renders — these are useEffect deps
+  // below; recomputing on every render produced an infinite update loop.
+  const classes = useMemo(() => getClassesForUniverse(universe), [universe]);
+  const classOptions = useMemo(() => getClassOptions(universe), [universe]);
+  const speciesOptions = useMemo(() => getSpeciesOptions(universe), [universe]);
 
   // Templates available for The Witcher and Naheulbeuk universes
   const witcherTemplates = getWitcherTemplates();
@@ -89,9 +91,10 @@ export function NewCharacterForm({
     cha: 8,
   });
   const [skills, setSkills] = useState<string[]>([]);
+  const [name, setName] = useState('');
 
   const classData = classes[classId];
-  const availableSkills = classData?.skillList ?? [];
+  const availableSkills = useMemo(() => classData?.skillList ?? [], [classData]);
   const skillLimit = classData?.skillChoices ?? 2;
 
   // Reset selections when the universe changes (class/species lists differ).
@@ -122,6 +125,7 @@ export function NewCharacterForm({
       classOptions.find((c) => c.name.toLowerCase() === selectedTemplate.class.toLowerCase());
     if (templateSpecies) setSpeciesId(templateSpecies.id);
     if (templateClass) setClassId(templateClass.id);
+    setName(selectedTemplate.name);
     setAbilities({
       str: selectedTemplate.abilities.str,
       dex: selectedTemplate.abilities.dex,
@@ -353,11 +357,9 @@ export function NewCharacterForm({
             name="name"
             required
             maxLength={80}
-            value={selectedTemplate ? selectedTemplate.name : ''}
+            value={name}
             disabled={!!selectedTemplate}
-            onChange={(_e) => {
-              // Name is controlled by template when selected
-            }}
+            onChange={(e) => setName(e.target.value)}
             className="rounded-none border border-line bg-[rgba(0,0,0,0.4)] px-3 py-2 font-narr text-lg text-text outline-none focus:border-gold disabled:opacity-50 disabled:cursor-not-allowed"
             placeholder={selectedTemplate ? '' : 'Elspeth Courtecire'}
           />
