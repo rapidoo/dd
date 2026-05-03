@@ -36,7 +36,7 @@ import {
   rollSchema,
 } from './tool-executors';
 import { GM_TOOLS, type RecordEntityInput, type RequestRollInput } from './tools';
-import { getGmPrompt, getUniverseConfig } from './universe';
+import { getGmPrompt } from './universe';
 
 // Re-export types for backwards compatibility while the rename is in progress.
 export type { DiceRollRecord, GmEvent };
@@ -626,8 +626,6 @@ ${partyLines.join('\n')}
 
 Quand un compagnon est présent, pense à lui laisser la parole régulièrement via prompt_companion — décris une scène, puis passe-lui le micro (indique character_id et éventuellement un hint).`;
 }
-
-
 
 async function executeCompanion(
   input: { character_id: string; hint?: string },

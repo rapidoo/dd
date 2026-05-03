@@ -4,18 +4,47 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { createSupabaseServerClient } from '../db/server';
-import type { CharacterRow } from '../db/types';
+import type { CharacterRow, Universe } from '../db/types';
 import { deriveCharacter } from '../rules/derivations';
-import { CLASSES, SPECIES } from '../rules/srd';
+import { getClassesForUniverse, getSpeciesForUniverse } from '../rules/srd';
 import type { AbilityScores } from '../rules/types';
 import { requireUser } from './auth';
 import type { ServerResult } from './campaigns';
+import { normalizeKitItem } from './inventory-normalize';
+
+const itemSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  type: z.string().trim().min(1).max(40),
+  damage: z.string().trim().max(80).optional(),
+  effect: z.string().trim().max(400).optional(),
+  count: z.coerce.number().int().min(1).max(999).optional(),
+  description: z.string().trim().max(400).optional(),
+});
+
+const spellSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  name: z.string().trim().min(1).max(120),
+  level: z.coerce.number().int().min(0).max(9),
+  school: z.string().trim().max(60).optional(),
+  description: z.string().trim().max(600),
+});
+
+const currencySchema = z.object({
+  cp: z.coerce.number().int().min(0).default(0),
+  sp: z.coerce.number().int().min(0).default(0),
+  ep: z.coerce.number().int().min(0).default(0),
+  gp: z.coerce.number().int().min(0).default(0),
+  pp: z.coerce.number().int().min(0).default(0),
+});
 
 const createSchema = z.object({
   campaignId: z.string().uuid(),
   name: z.string().trim().min(1).max(80),
-  speciesId: z.string().refine((v) => v in SPECIES, 'Espèce inconnue'),
-  classId: z.string().refine((v) => v in CLASSES, 'Classe inconnue'),
+  // Species/class are validated against the campaign's universe AFTER ownership
+  // check (see createCharacter). Universe-agnostic check would reject Witcher
+  // sorceleurs and Naheulbeuk classes that aren't in the D&D dict.
+  speciesId: z.string().trim().min(1).max(40),
+  classId: z.string().trim().min(1).max(40),
   level: z.coerce.number().int().min(1).max(20).default(1),
   background: z.string().trim().max(80).optional().nullable(),
   alignment: z.string().trim().max(40).optional().nullable(),
@@ -29,7 +58,18 @@ const createSchema = z.object({
   }),
   skillProficiencies: z.array(z.string()).max(8),
   personality: z.string().trim().max(1000).optional().nullable(),
+  inventory: z.array(itemSchema).max(40).default([]),
+  spells: z.array(spellSchema).max(40).default([]),
+  currency: currencySchema.optional(),
 });
+
+function safeParseJson<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
 
 function parseFormEntries(formData: FormData) {
   const abilities: AbilityScores = {
@@ -40,6 +80,16 @@ function parseFormEntries(formData: FormData) {
     wis: Number(formData.get('wis') ?? 10),
     cha: Number(formData.get('cha') ?? 10),
   };
+  const inventory = formData
+    .getAll('inventory')
+    .map((raw) => safeParseJson<unknown>(String(raw), null))
+    .filter((v): v is Record<string, unknown> => !!v && typeof v === 'object');
+  const spells = formData
+    .getAll('spells')
+    .map((raw) => safeParseJson<unknown>(String(raw), null))
+    .filter((v): v is Record<string, unknown> => !!v && typeof v === 'object');
+  const currencyRaw = formData.get('currency');
+  const currency = currencyRaw ? safeParseJson(String(currencyRaw), undefined) : undefined;
   return {
     campaignId: formData.get('campaignId'),
     name: formData.get('name'),
@@ -51,6 +101,9 @@ function parseFormEntries(formData: FormData) {
     abilities,
     skillProficiencies: formData.getAll('skillProficiencies').map(String),
     personality: formData.get('personality') || null,
+    inventory,
+    spells,
+    currency,
   };
 }
 
@@ -70,15 +123,25 @@ export async function createCharacter(
   const user = await requireUser();
   const supabase = await createSupabaseServerClient();
 
-  // Verify campaign ownership via RLS-respecting query.
+  // Verify campaign ownership via RLS-respecting query, and read the universe
+  // so we can validate species/class against the right dictionary.
   const { data: campaign } = await supabase
     .from('campaigns')
-    .select('id')
+    .select('id, universe')
     .eq('id', input.campaignId)
     .maybeSingle();
   if (!campaign) return { ok: false, error: 'Campagne introuvable' };
+  const universe: Universe = (campaign.universe as Universe | null) ?? 'dnd5e';
+
+  if (!(input.speciesId in getSpeciesForUniverse(universe))) {
+    return { ok: false, error: `Espèce inconnue pour cet univers : ${input.speciesId}` };
+  }
+  if (!(input.classId in getClassesForUniverse(universe))) {
+    return { ok: false, error: `Classe inconnue pour cet univers : ${input.classId}` };
+  }
 
   const derived = deriveCharacter({
+    universe,
     classId: input.classId,
     speciesId: input.speciesId,
     level: input.level,
@@ -114,6 +177,9 @@ export async function createCharacter(
         skills: derived.skillProficiencies,
       },
       spell_slots: derived.spellSlots,
+      spells_known: input.spells,
+      inventory: input.inventory.map(normalizeKitItem),
+      currency: input.currency ?? { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 },
       persona: input.personality ? { notes: input.personality } : null,
     })
     .select('*')

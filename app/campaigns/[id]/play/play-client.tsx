@@ -31,7 +31,7 @@ type DisplayMessage =
   | {
       kind: 'msg';
       id: string;
-      authorKind: 'user' | 'gm' | 'companion';
+      authorKind: 'user' | 'gm' | 'companion' | 'npc';
       authorName: string;
       content: string;
       time: string;
@@ -68,6 +68,9 @@ export function PlayClient({
     initialMessages.map((m) => toDisplay(m, companionMap)),
   );
   const [combatState, setCombatState] = useState<CombatState | null>(null);
+  // Active combat = something to fight + not yet over. Drives the blood
+  // theme on the play view (header tint, chat backdrop, input border).
+  const inCombat = combatState !== null && !combatState.endedAt;
   // Tracks the last actor we inserted a divider for, so we don't duplicate
   // dividers when the same combat_state is re-emitted (e.g. condition tick
   // without a real cursor move).
@@ -102,11 +105,30 @@ export function PlayClient({
   const [isPending, startTransition] = useTransition();
   const [partyOpen, setPartyOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const introFiredRef = useRef(false);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll reacts to count changes, not contents
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages.length, typing]);
+
+  // Auto-intro : si la session est vide à l'arrivée, le narrateur ouvre
+  // l'aventure (décor + party + hook) sans attendre que le joueur parle.
+  // Garde-fou : useRef pour ne pas re-déclencher si le composant remonte
+  // pendant que la requête est encore en vol.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only fire once on initial empty state
+  useEffect(() => {
+    if (introFiredRef.current) return;
+    if (initialMessages.length > 0) {
+      introFiredRef.current = true;
+      return;
+    }
+    introFiredRef.current = true;
+    void runGmStream(
+      new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+      `/api/sessions/${sessionId}/stream?trigger=session_intro`,
+    );
+  }, []);
 
   function playerName() {
     return player?.name ?? 'Toi';
@@ -154,21 +176,14 @@ export function PlayClient({
     );
   }
 
-  async function runGmStream(time: string, url: string) {
+  // The server-side orchestrator (lib/server/turn-orchestrator.ts) chains
+  // turns until the cursor lands on the PC or combat ends. Each turn
+  // is bracketed by `turn_start` / `turn_end` events so we render distinct
+  // bubbles per author (narrator, NPC, companion) without any client-side
+  // chaining loop.
+  async function runGmStream(_time: string, url: string): Promise<void> {
     setTyping('Le Conteur');
-    const gmId = `gm-${Date.now()}`;
-    setMessages((m) => [
-      ...m,
-      {
-        kind: 'msg',
-        id: gmId,
-        authorKind: 'gm',
-        authorName: 'Le Conteur',
-        content: '',
-        time,
-        streaming: true,
-      },
-    ]);
+    let currentBubbleId: string | null = null;
     try {
       const response = await fetch(url);
       if (!response.ok || !response.body) throw new Error('Stream indisponible');
@@ -184,9 +199,57 @@ export function PlayClient({
         for (const chunk of lines) {
           const ev = parseSse(chunk);
           if (!ev) continue;
-          if (ev.event === 'delta') {
+          if (ev.event === 'turn_start') {
+            type ActorRef = {
+              kind: 'narrator' | 'npc' | 'companion';
+              id?: string;
+              name?: string;
+            };
+            const actor = (ev.data as { actor: ActorRef }).actor;
+            if (actor && (actor.kind === 'narrator' || actor.kind === 'npc')) {
+              const id = `b-${Date.now()}-${actor.kind}`;
+              currentBubbleId = id;
+              const authorName = actor.kind === 'narrator' ? 'Le Conteur' : (actor.name ?? 'PNJ');
+              const color = actor.kind === 'npc' ? '#a13028' : undefined;
+              const now = new Date().toLocaleTimeString('fr-FR', {
+                hour: '2-digit',
+                minute: '2-digit',
+              });
+              setMessages((m) => [
+                ...m,
+                {
+                  kind: 'msg',
+                  id,
+                  authorKind: actor.kind === 'narrator' ? 'gm' : 'npc',
+                  authorName,
+                  content: '',
+                  time: now,
+                  streaming: true,
+                  color,
+                },
+              ]);
+              setTyping(authorName);
+            } else if (actor?.kind === 'companion') {
+              setTyping(actor.name ?? 'Compagnon');
+            }
+          } else if (ev.event === 'turn_end') {
+            if (currentBubbleId) {
+              const id = currentBubbleId;
+              setMessages((m) =>
+                m.flatMap((x) => {
+                  if (x.kind !== 'msg' || x.id !== id) return [x];
+                  if (!x.content.trim()) return [];
+                  return [{ ...x, streaming: false }];
+                }),
+              );
+            }
+            currentBubbleId = null;
+            setTyping(null);
+          } else if (ev.event === 'delta') {
             const text = (ev.data as { text: string }).text;
-            setMessages((m) => appendToMsg(m, gmId, text));
+            if (currentBubbleId) {
+              setMessages((m) => appendToMsg(m, currentBubbleId as string, text));
+            }
           } else if (ev.event === 'companion') {
             const comp = ev.data as { characterId: string; name: string; content: string };
             const now = new Date().toLocaleTimeString('fr-FR', {
@@ -225,8 +288,6 @@ export function PlayClient({
               | { phase: 'ended' }
               | { phase: 'state'; state: CombatState };
             if (data.phase === 'started') {
-              // The accompanying `state` payload arrives on the very next event.
-              // Optimistically clear any stale state so the tracker shows fresh.
               currentActorRef.current = null;
               setCombatState(null);
             } else if (data.phase === 'state') {
@@ -249,31 +310,35 @@ export function PlayClient({
             }
             void refreshParty();
           } else if (ev.event === 'party') {
-            // Inventory / currency / slots / rest changed mid-turn.
             void refreshParty();
           } else if (ev.event === 'error') {
             const errText = (ev.data as { message: string }).message;
-            setMessages((m) => appendToMsg(m, gmId, `\n⚠ ${errText}`));
+            if (currentBubbleId) {
+              setMessages((m) => appendToMsg(m, currentBubbleId as string, `\n⚠ ${errText}`));
+            }
           }
+          // Note: 'time' was the parameter of this function — unused now since each
+          // turn timestamps itself when it opens. Kept in the signature for callers.
         }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erreur de streaming';
-      setMessages((m) =>
-        m.map((x) =>
-          x.kind === 'msg' && x.id === gmId
-            ? { ...x, content: `⚠ ${message}`, streaming: false }
-            : x,
-        ),
-      );
+      if (currentBubbleId) {
+        const id = currentBubbleId;
+        setMessages((m) =>
+          m.map((x) =>
+            x.kind === 'msg' && x.id === id
+              ? { ...x, content: `⚠ ${message}`, streaming: false }
+              : x,
+          ),
+        );
+      }
     } finally {
       setTyping(null);
+      // Defensive cleanup: any bubble still flagged streaming → close it
+      // (server-side error or aborted connection).
       setMessages((m) =>
-        m.flatMap((x) => {
-          if (x.kind !== 'msg' || x.id !== gmId) return [x];
-          if (!x.content.trim()) return [];
-          return [{ ...x, streaming: false }];
-        }),
+        m.map((x) => (x.kind === 'msg' && x.streaming ? { ...x, streaming: false } : x)),
       );
       void refreshParty();
     }
@@ -282,20 +347,59 @@ export function PlayClient({
   return (
     <div className="relative flex h-screen">
       <SessionSidebar campaignId={campaignId} current="session" />
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="flex items-center justify-between border-b border-line bg-gradient-to-br from-[rgba(212,166,76,0.1)] to-transparent px-4 py-4 md:px-8">
+      <div
+        className="flex flex-1 flex-col overflow-hidden transition-colors duration-300"
+        style={
+          inCombat
+            ? {
+                boxShadow:
+                  'inset 0 -1px 0 rgba(154,48,40,0.6), inset 0 0 80px rgba(154,48,40,0.08)',
+              }
+            : undefined
+        }
+      >
+        <header
+          className={`flex items-center justify-between border-b px-4 py-4 transition-colors duration-300 md:px-8 ${
+            inCombat
+              ? 'border-blood/60 bg-gradient-to-br from-[rgba(154,48,40,0.18)] to-transparent'
+              : 'border-line bg-gradient-to-br from-[rgba(212,166,76,0.1)] to-transparent'
+          }`}
+        >
           <div className="flex items-center gap-4">
             <div
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-candle-glow to-gold text-lg text-bg-deep"
-              style={{ boxShadow: '0 0 20px rgba(240,176,80,0.44)' }}
+              className={`flex h-10 w-10 items-center justify-center rounded-full text-lg text-bg-deep transition-colors duration-300 ${
+                inCombat
+                  ? 'bg-gradient-to-br from-[#c45040] to-blood'
+                  : 'bg-gradient-to-br from-candle-glow to-gold'
+              }`}
+              style={{
+                boxShadow: inCombat
+                  ? '0 0 22px rgba(154,48,40,0.55)'
+                  : '0 0 20px rgba(240,176,80,0.44)',
+              }}
             >
-              ⚜
+              {inCombat ? '⚔' : '⚜'}
             </div>
             <div>
-              <p className="font-display text-[10px] uppercase tracking-[0.3em] text-gold">
+              <p
+                className={`font-display text-[10px] uppercase tracking-[0.3em] transition-colors duration-300 ${
+                  inCombat ? 'text-blood' : 'text-gold'
+                }`}
+              >
                 Session {sessionNumber}
+                {inCombat && (
+                  <span className="ml-3 inline-block border border-blood/60 px-1.5 py-0.5 font-display text-[9px] tracking-[0.25em] text-blood">
+                    ⚔ COMBAT · ROUND {combatState?.round ?? 1}
+                  </span>
+                )}
               </p>
-              <h1 className="font-narr text-xl text-gold-bright">{campaignName}</h1>
+              <h1
+                className={`font-narr text-xl transition-colors duration-300 ${
+                  inCombat ? 'text-[#e07060]' : 'text-gold-bright'
+                }`}
+              >
+                {campaignName}
+              </h1>
             </div>
           </div>
           {(player || companions.length > 0) && (
@@ -315,10 +419,11 @@ export function PlayClient({
           <div className="flex flex-1 flex-col overflow-hidden">
             <div
               ref={scrollRef}
-              className="flex-1 overflow-auto px-4 pt-6 pb-4 md:px-10"
+              className="flex-1 overflow-auto px-4 pt-6 pb-4 transition-[background] duration-300 md:px-10"
               style={{
-                background:
-                  'radial-gradient(ellipse at 50% 100%, rgba(240,176,80,0.05), transparent 60%)',
+                background: inCombat
+                  ? 'radial-gradient(ellipse at 50% 100%, rgba(154,48,40,0.12), transparent 65%)'
+                  : 'radial-gradient(ellipse at 50% 100%, rgba(240,176,80,0.05), transparent 60%)',
               }}
             >
               {messages.length === 0 && (
@@ -345,14 +450,18 @@ export function PlayClient({
                           ? 'gm'
                           : m.authorKind === 'companion'
                             ? 'companion'
-                            : 'user',
+                            : m.authorKind === 'npc'
+                              ? 'npc'
+                              : 'user',
                       name: m.authorName,
                       glyph:
                         m.authorKind === 'gm'
                           ? '⚜'
                           : m.authorKind === 'companion'
                             ? '◉'
-                            : undefined,
+                            : m.authorKind === 'npc'
+                              ? '✠'
+                              : undefined,
                       color: m.color,
                     }}
                     text={renderNarration(m.content)}
@@ -364,7 +473,11 @@ export function PlayClient({
               {typing && <TypingIndicator who={typing} />}
             </div>
 
-            <div className="flex items-end gap-2 border-t border-line px-4 py-4 md:px-8">
+            <div
+              className={`flex items-end gap-2 border-t px-4 py-4 transition-colors duration-300 md:px-8 ${
+                inCombat ? 'border-blood/50 bg-[rgba(154,48,40,0.04)]' : 'border-line'
+              }`}
+            >
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -848,6 +961,19 @@ function toDisplay(m: MessageRow, companions: Map<string, CharacterRow>): Displa
       content: m.content,
       time,
       color: '#c47a3a',
+    };
+  }
+  if (m.author_kind === 'character' && !m.author_id) {
+    // NPC turn — author_id is null, NPC name lives in metadata.
+    const meta = (m.metadata as { npc_name?: string } | null) ?? null;
+    return {
+      kind: 'msg',
+      id: m.id,
+      authorKind: 'npc',
+      authorName: meta?.npc_name ?? 'PNJ',
+      content: m.content,
+      time,
+      color: '#a13028',
     };
   }
   return {

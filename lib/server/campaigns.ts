@@ -149,7 +149,7 @@ ${modePrefix} Reste en mode combat continu. Ne propose PAS de fuir, de négocier
 
   // Fallback: if universe column doesn't exist yet, insert without it
   // This handles the case where the migration hasn't been applied yet
-  if (error && error.message?.includes("Could not find the 'universe' column")) {
+  if (error?.message?.includes("Could not find the 'universe' column")) {
     const { data: fallbackData, error: fallbackError } = await supabase
       .from('campaigns')
       .insert({

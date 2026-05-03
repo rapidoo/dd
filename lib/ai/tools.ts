@@ -205,15 +205,48 @@ export const GM_TOOLS: ToolDef[] = [
       required: ['character_id'],
     },
   },
+  {
+    name: 'pass_turn',
+    description:
+      'Passe le tour du combattant courant sans action (joueur qui décline, PNJ stunned/incapacitated, compagnon qui temporise). Le serveur avance le curseur vers le combattant suivant. À utiliser UNIQUEMENT en combat actif.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        reason: {
+          type: 'string',
+          description:
+            'Optionnel — pourquoi le tour est passé (ex. "joueur attend", "gobelin paralysé").',
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 /**
- * Tools exposed to a companion agent during its own turn. Just request_roll
- * for now — companions roll their own attacks/damages, but state-mutating
- * tools (start_combat, end_combat, prompt_companion, grant_item, …) stay
- * GM-only so the companion can't escape its own turn.
+ * Narrator (story / out-of-combat) tools — superset, every tool the narrator
+ * can invoke. Alias for GM_TOOLS while the rename is in progress.
  */
-export const COMPANION_TOOLS: ToolDef[] = GM_TOOLS.filter((t) => t.name === 'request_roll');
+export const NARRATOR_TOOLS: ToolDef[] = GM_TOOLS;
+
+/**
+ * NPC turn tools — minimal set the npc-agent can invoke during its own turn:
+ * resolve attack/damage/save rolls, apply conditions to its target, or pass
+ * if incapacitated. No start_combat, no prompt_companion, no inventory tools.
+ */
+export const NPC_TOOLS: ToolDef[] = GM_TOOLS.filter((t) =>
+  ['request_roll', 'apply_condition', 'pass_turn'].includes(t.name),
+);
+
+/**
+ * Tools exposed to a companion agent during its own turn. Companions roll
+ * their own attacks/damages and can pass if needed; state-mutating tools
+ * (start_combat, prompt_companion, grant_item, …) stay narrator-only so the
+ * companion can't escape its own turn.
+ */
+export const COMPANION_TOOLS: ToolDef[] = GM_TOOLS.filter((t) =>
+  ['request_roll', 'pass_turn'].includes(t.name),
+);
 
 export type GmToolName = 'request_roll' | 'recall_memory' | 'record_entity';
 

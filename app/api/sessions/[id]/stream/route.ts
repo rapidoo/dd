@@ -1,22 +1,28 @@
 import { runConcierge } from '../../../../../lib/ai/concierge';
 import { isDebugCommand, runDebugCommand } from '../../../../../lib/ai/debug-mode';
-import { runGmTurn } from '../../../../../lib/ai/gm-agent';
-import { createSupabaseServerClient } from '../../../../../lib/db/server';
+import {
+  createSupabaseServerClient,
+  createSupabaseServiceClient,
+} from '../../../../../lib/db/server';
 import type { CharacterRow, MessageRow, Universe } from '../../../../../lib/db/types';
 import { rateLimit } from '../../../../../lib/server/rate-limit';
+import { type ActorRef, runTurnLoop } from '../../../../../lib/server/turn-orchestrator';
 
 export const runtime = 'nodejs';
 
 /**
- * GET /api/sessions/:id/stream?message=... — SSE stream of the GM turn.
- * The user message has already been persisted by postUserMessage.
+ * GET /api/sessions/:id/stream?message=... — SSE stream of one player input
+ * cycle. The orchestrator may chain multiple turns (narrator + NPCs +
+ * companions) inside a single connection until cursor lands on the PC or
+ * combat ends. Boundaries between authors are surfaced as `turn_start` /
+ * `turn_end` events so the client can render distinct chat bubbles.
  */
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: sessionId } = await params;
   const url = new URL(req.url);
   const userMessage = url.searchParams.get('message') ?? '';
   const trigger = url.searchParams.get('trigger') ?? '';
-  if (!userMessage.trim() && trigger !== 'companion_spoke') {
+  if (!userMessage.trim() && trigger !== 'companion_spoke' && trigger !== 'session_intro') {
     return new Response('missing message', { status: 400 });
   }
 
@@ -24,7 +30,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const { data: user } = await supabase.auth.getUser();
   if (!user.user) return new Response('unauthorized', { status: 401 });
 
-  // Rate limit: 20 GM turns per minute per user (Opus costs add up).
   const rl = rateLimit(`sse:${user.user.id}`, 20, 60_000);
   if (!rl.ok) {
     return new Response('Too many requests', {
@@ -35,16 +40,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     });
   }
 
-  // Hard cap on user message size — Zod already rejects > 4000 for the
-  // POST Server Action, but the SSE route accepts the message in the URL
-  // where only the Server Action-side validation runs. Double-check here.
   if (userMessage.length > 4000) {
     return new Response('message too large', { status: 413 });
   }
 
-  // Ownership check — sessions is RLS-gated so this returns null if the user
-  // does not own the campaign. Treat null as 404 to avoid leaking session
-  // existence and to block any downstream service-role writes.
   const { data: session } = await supabase
     .from('sessions')
     .select('campaign_id, session_number')
@@ -78,34 +77,109 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       };
 
-      const fullText: string[] = [];
+      // Per-turn accumulators. Reset on every turn_start, persisted on turn_end.
+      let currentActor: ActorRef | null = null;
+      let currentText: string[] = [];
+      // Aggregated text across the whole connection — used by the concierge so
+      // it can read the full narration once everything settled.
+      const totalText: string[] = [];
+
+      const persistTurn = async (actor: ActorRef, text: string) => {
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        const content = trimmed.length > 16384 ? `${trimmed.slice(0, 16380)}…` : trimmed;
+        const serviceSupabase = createSupabaseServiceClient();
+        if (actor.kind === 'narrator') {
+          await serviceSupabase
+            .from('messages')
+            .insert({ session_id: sessionId, author_kind: 'gm', content });
+        } else if (actor.kind === 'npc') {
+          // NPCs are not in the characters table — store as 'character' with
+          // a null author_id and the NPC name in metadata so the UI can label
+          // the bubble. (The author_kind enum doesn't have 'npc'.)
+          await serviceSupabase.from('messages').insert({
+            session_id: sessionId,
+            author_kind: 'character',
+            author_id: null,
+            content,
+            metadata: { npc_id: actor.id, npc_name: actor.name },
+          });
+        }
+        // Companion turns are persisted inside respondAsCompanion itself.
+      };
+
       try {
-        // /debug <subcommand> short-circuits the LLM entirely — fast UI
-        // smoke test without spending tokens. Honored in local dev and
-        // Vercel preview, but not Vercel production.
         const debugAllowed = process.env.VERCEL_ENV
           ? process.env.VERCEL_ENV !== 'production'
           : process.env.NODE_ENV !== 'production';
         const debug = debugAllowed && isDebugCommand(userMessage);
 
-        const iterator = debug
-          ? runDebugCommand(sessionId, userMessage)
-          : runGmTurn({
-              sessionId,
-              userMessage:
-                trigger === 'companion_spoke'
-                  ? "(Un compagnon vient de parler ci-dessus. Réagis brièvement en tant que MJ : décris la réaction des autres autour du feu, ou enchaîne la scène, sans répéter ce qu'il a dit.)"
-                  : userMessage,
-              history: (history ?? []) as MessageRow[],
-              player,
-              companions,
-              worldSummary: campaign?.world_summary ?? null,
-              universe: (campaign?.universe as Universe | null | undefined) ?? 'dnd5e',
-            });
+        if (debug) {
+          // Debug shortcut: pass through the existing single-turn iterator.
+          const iter = runDebugCommand(sessionId, userMessage);
+          for await (const ev of iter) {
+            if (ev.type === 'text_delta') {
+              totalText.push(ev.delta);
+              write('delta', { text: ev.delta });
+            } else if (ev.type === 'dice_request') {
+              write('dice', ev.roll);
+            } else if (ev.type === 'combat_started') {
+              write('combat', { phase: 'started', combatId: ev.combatId });
+            } else if (ev.type === 'combat_ended') {
+              write('combat', { phase: 'ended' });
+            } else if (ev.type === 'combat_state') {
+              write('combat', { phase: 'state', state: ev.state });
+            } else if (ev.type === 'party_update') {
+              write('party', { phase: 'update' });
+            } else if (ev.type === 'error') {
+              write('error', { message: ev.message });
+            } else if (ev.type === 'done') {
+              const raw = totalText.join('').trim();
+              const content = raw.length > 16384 ? `${raw.slice(0, 16380)}…` : raw;
+              if (content) {
+                await createSupabaseServiceClient()
+                  .from('messages')
+                  .insert({ session_id: sessionId, author_kind: 'gm', content });
+              }
+              write('done', { length: content.length });
+            }
+          }
+          return;
+        }
 
-        for await (const ev of iterator) {
-          if (ev.type === 'text_delta') {
-            fullText.push(ev.delta);
+        const orchestrator = runTurnLoop({
+          sessionId,
+          campaignId: session.campaign_id,
+          userMessage,
+          trigger:
+            trigger === 'companion_spoke'
+              ? 'companion_spoke'
+              : trigger === 'session_intro'
+                ? 'session_intro'
+                : 'user_input',
+          history: (history ?? []) as MessageRow[],
+          player,
+          companions,
+          worldSummary: campaign?.world_summary ?? null,
+          universe: (campaign?.universe as Universe | null | undefined) ?? 'dnd5e',
+        });
+
+        for await (const ev of orchestrator) {
+          if (ev.type === 'turn_start') {
+            currentActor = ev.actor;
+            currentText = [];
+            write('turn_start', { actor: ev.actor });
+          } else if (ev.type === 'turn_end') {
+            if (currentActor) {
+              const accumulated = currentText.join('');
+              await persistTurn(currentActor, accumulated);
+              totalText.push(accumulated);
+            }
+            write('turn_end', { actor: ev.actor });
+            currentActor = null;
+            currentText = [];
+          } else if (ev.type === 'text_delta') {
+            currentText.push(ev.delta);
             write('delta', { text: ev.delta });
           } else if (ev.type === 'dice_request') {
             write('dice', ev.roll);
@@ -114,6 +188,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           } else if (ev.type === 'memory_recalled') {
             write('memory', { query: ev.query, result: ev.result });
           } else if (ev.type === 'companion') {
+            // Companion text was generated by respondAsCompanion and already
+            // persisted inside it. Just forward to the client.
             write('companion', {
               characterId: ev.characterId,
               name: ev.characterName,
@@ -124,41 +200,35 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           } else if (ev.type === 'combat_ended') {
             write('combat', { phase: 'ended' });
           } else if (ev.type === 'combat_state') {
-            // Authoritative combat snapshot pushed by the server-side loop —
-            // round, current actor, full participants list with HP &
-            // conditions. UI consumes directly, no refetch needed.
             write('combat', { phase: 'state', state: ev.state });
           } else if (ev.type === 'party_update') {
-            // Non-combat mutation (inventory, currency, slots, rest).
-            // Client refetches party rows.
             write('party', { phase: 'update' });
           } else if (ev.type === 'error') {
             write('error', { message: ev.message });
-          } else if (ev.type === 'done') {
-            // Persist the assembled GM message, truncated defensively to match
-            // the DB CHECK constraint (16 KB / 16384 chars).
-            const raw = fullText.join('').trim();
-            const content = raw.length > 16384 ? `${raw.slice(0, 16380)}…` : raw;
-            if (content) {
-              await supabase
-                .from('messages')
-                .insert({ session_id: sessionId, author_kind: 'gm', content });
-              // Fire-and-forget concierge pass: Haiku reads the narration and
-              // handles entity graph + inventory/currency bookkeeping that
-              // Opus may have mentioned purely in prose. Never blocks or
-              // surfaces errors.
-              void runConcierge({
-                campaignId: session.campaign_id,
-                sessionId,
-                sessionNumber: session.session_number,
-                narration: content,
-                player,
-                companions,
-              });
-            }
-            write('done', { length: content.length });
           }
         }
+
+        // Flush remaining buffered turn text in case the loop ended without
+        // a closing turn_end (defensive — shouldn't happen).
+        if (currentActor && currentText.length > 0) {
+          await persistTurn(currentActor, currentText.join(''));
+          totalText.push(currentText.join(''));
+        }
+
+        const aggregated = totalText.join('').trim();
+        if (aggregated) {
+          // Concierge reads the full narration to extract entities + inventory
+          // deltas. Fire-and-forget; never blocks the stream.
+          void runConcierge({
+            campaignId: session.campaign_id,
+            sessionId,
+            sessionNumber: session.session_number,
+            narration: aggregated,
+            player,
+            companions,
+          });
+        }
+        write('done', { length: aggregated.length });
       } catch (err) {
         write('error', { message: err instanceof Error ? err.message : 'stream error' });
       } finally {

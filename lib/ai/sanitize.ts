@@ -27,6 +27,7 @@ const TOOL_NAMES = [
   'cast_spell',
   'trigger_rest',
   'prompt_companion',
+  'pass_turn',
 ] as const;
 
 // Keys that only appear inside tool-call payloads (kind="attack", target_ac=…).
