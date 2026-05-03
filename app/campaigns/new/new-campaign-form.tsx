@@ -3,7 +3,7 @@
 import { useActionState, useState } from 'react';
 import { BtnPrimary } from '../../../components/ui/button';
 import type { CampaignRow, Universe } from '../../../lib/db/types';
-import { getModulesByUniverse, MODULE_TEMPLATES } from '../../../lib/modules/templates';
+import { getModulesByUniverse } from '../../../lib/modules/templates';
 import { createCampaign, type ServerResult } from '../../../lib/server/campaigns';
 
 type Mode = 'homebrew' | 'module' | 'generated' | 'arena';

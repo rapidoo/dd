@@ -113,12 +113,12 @@ describe('toMistralMessages', () => {
 
   function findAssistant(msgs: ReturnType<typeof toMistralMessages>, idx: number) {
     const m = msgs[idx];
-    if (!m || m.role !== 'assistant') throw new Error('expected assistant at ' + idx);
+    if (!m || m.role !== 'assistant') throw new Error(`expected assistant at ${idx}`);
     return m;
   }
   function findTool(msgs: ReturnType<typeof toMistralMessages>, idx: number) {
     const m = msgs[idx];
-    if (!m || m.role !== 'tool') throw new Error('expected tool at ' + idx);
+    if (!m || m.role !== 'tool') throw new Error(`expected tool at ${idx}`);
     return m;
   }
 

@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import type { Universe } from '../../../../../lib/db/types';
 import { requireUser } from '../../../../../lib/server/auth';
 import { getCampaign } from '../../../../../lib/server/campaigns';
 import { NewCharacterForm } from './new-character-form';

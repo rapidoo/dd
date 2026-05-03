@@ -5,12 +5,7 @@ import { createSupabaseServerClient } from '../../../../lib/db/server';
 import type { CharacterRow } from '../../../../lib/db/types';
 import { getAbilityModifier } from '../../../../lib/rules/abilities';
 import { proficiencyBonus } from '../../../../lib/rules/proficiency';
-import {
-  CLASSES,
-  getClassesForUniverse,
-  getSpeciesForUniverse,
-  SPECIES,
-} from '../../../../lib/rules/srd';
+import { getClassesForUniverse, getSpeciesForUniverse } from '../../../../lib/rules/srd';
 import { requireUser } from '../../../../lib/server/auth';
 import { getCampaign } from '../../../../lib/server/campaigns';
 import type { InventoryItem } from '../../../../lib/server/inventory-actions';

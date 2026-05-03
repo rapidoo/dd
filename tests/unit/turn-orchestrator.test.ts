@@ -6,12 +6,16 @@ const {
   runNpcTurnMock,
   respondAsCompanionMock,
   executePassTurnMock,
+  persistActorMessageMock,
+  persistCompanionMessageMock,
 } = vi.hoisted(() => ({
   getActiveCombatStateMock: vi.fn(),
   runGmTurnMock: vi.fn(),
   runNpcTurnMock: vi.fn(),
   respondAsCompanionMock: vi.fn(),
   executePassTurnMock: vi.fn(),
+  persistActorMessageMock: vi.fn(),
+  persistCompanionMessageMock: vi.fn(),
 }));
 
 vi.mock('../../lib/server/combat-loop', async () => {
@@ -42,16 +46,9 @@ vi.mock('../../lib/ai/tool-executors', () => ({
   executePassTurn: executePassTurnMock,
 }));
 
-vi.mock('../../lib/db/server', () => ({
-  createSupabaseServiceClient: () => ({
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          order: () => Promise.resolve({ data: [] }),
-        }),
-      }),
-    }),
-  }),
+vi.mock('../../lib/server/message-persistence', () => ({
+  persistActorMessage: persistActorMessageMock,
+  persistCompanionMessage: persistCompanionMessageMock,
 }));
 
 import { runTurnLoop } from '../../lib/server/turn-orchestrator';
@@ -84,6 +81,10 @@ describe('runTurnLoop', () => {
     runNpcTurnMock.mockReset();
     respondAsCompanionMock.mockReset();
     executePassTurnMock.mockReset();
+    persistActorMessageMock.mockReset();
+    persistActorMessageMock.mockResolvedValue(null);
+    persistCompanionMessageMock.mockReset();
+    persistCompanionMessageMock.mockResolvedValue(null);
   });
 
   it('NARRATIVE mode: dispatches to narrator and emits turn_start/turn_end', async () => {
@@ -187,6 +188,74 @@ describe('runTurnLoop', () => {
         (e as { actor?: { kind?: string } }).actor?.kind === 'npc',
     );
     expect(end).toBeDefined();
+  });
+
+  it('adds persisted narrator output to the in-memory history before chained turns', async () => {
+    const npcParticipant = {
+      id: 'npc-1',
+      kind: 'npc' as const,
+      name: 'Bandit',
+      ac: 13,
+      currentHP: 7,
+      maxHP: 7,
+      conditions: [],
+      isCurrent: true,
+      initiative: 10,
+    };
+    const pcParticipant = {
+      id: 'pc-1',
+      kind: 'pc' as const,
+      name: 'Hero',
+      ac: 16,
+      currentHP: 20,
+      maxHP: 20,
+      conditions: [],
+      isCurrent: true,
+      initiative: 14,
+    };
+    const npcState = {
+      combatId: 'c',
+      round: 1,
+      currentTurnIndex: 0,
+      participants: [npcParticipant],
+    };
+    const persistedGmMessage = {
+      id: 'm-gm',
+      session_id: 'sess',
+      author_kind: 'gm',
+      author_id: null,
+      content: 'La porte vole en éclats.',
+      metadata: {},
+      created_at: '2026-05-03T20:00:00Z',
+    };
+
+    getActiveCombatStateMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(npcState)
+      .mockResolvedValueOnce(npcState)
+      .mockResolvedValueOnce({
+        combatId: 'c',
+        round: 1,
+        currentTurnIndex: 1,
+        participants: [{ ...npcParticipant, isCurrent: false }, pcParticipant],
+      });
+    persistActorMessageMock.mockResolvedValueOnce(persistedGmMessage).mockResolvedValue(null);
+    runGmTurnMock.mockReturnValue(gmTurnFixture('La porte vole en éclats.'));
+    runNpcTurnMock.mockImplementation((input: { history: unknown[] }) => {
+      expect(input.history).toContain(persistedGmMessage);
+      return npcTurnFixture('Le bandit charge.');
+    });
+
+    const events: unknown[] = [];
+    for await (const ev of runTurnLoop(baseInput)) events.push(ev);
+
+    expect(runGmTurnMock).toHaveBeenCalledTimes(1);
+    expect(runNpcTurnMock).toHaveBeenCalledTimes(1);
+    expect(persistActorMessageMock).toHaveBeenCalledWith({
+      sessionId: 'sess',
+      actor: { kind: 'narrator' },
+      content: 'La porte vole en éclats.',
+    });
   });
 
   it('COMBAT mode ended (endedAt set): runs narrator epilog and exits', async () => {

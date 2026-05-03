@@ -3,9 +3,9 @@ import type { GmEvent } from '../ai/events';
 import { renderCombatBlock, runGmTurn } from '../ai/gm-agent';
 import { runNpcTurn } from '../ai/npc-agent';
 import { executePassTurn, executeRoll } from '../ai/tool-executors';
-import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow, MessageRow, Universe } from '../db/types';
 import { type CombatState, getActiveCombatState } from './combat-loop';
+import { persistActorMessage, persistCompanionMessage } from './message-persistence';
 
 /**
  * Server-authoritative turn orchestrator. Reads the combat state machine and
@@ -46,15 +46,20 @@ const MAX_DEPTH = 12;
 export async function* runTurnLoop(input: TurnLoopInput): AsyncGenerator<OrchestratorEvent> {
   let userMsg = input.userMessage;
   let trigger = input.trigger;
+  const history = [...input.history];
 
   for (let depth = 0; depth < MAX_DEPTH; depth++) {
     const state = await getActiveCombatState(input.sessionId).catch(() => null);
 
     // ─── NARRATIVE mode ────────────────────────────────────────────────
     if (!state || state.endedAt) {
-      yield { type: 'turn_start', actor: { kind: 'narrator' } };
-      yield* forwardWithoutDone(
-        runGmTurn({
+      const actor = { kind: 'narrator' } as const;
+      yield { type: 'turn_start', actor };
+      yield* forwardAndPersist({
+        sessionId: input.sessionId,
+        actor,
+        history,
+        events: runGmTurn({
           sessionId: input.sessionId,
           userMessage:
             trigger === 'companion_spoke'
@@ -62,14 +67,14 @@ export async function* runTurnLoop(input: TurnLoopInput): AsyncGenerator<Orchest
               : trigger === 'session_intro'
                 ? "(Début de session. Ouvre l'aventure en tant que MJ : pose le décor en 4-6 phrases (lieu, ambiance, ce que les sens captent), présente brièvement le PJ et les compagnons présents en t'appuyant sur leur fiche, puis lance un hook narratif (rumeur, croisement, événement) et termine par « Que fais-tu ? ». Ne décris pas un combat, ne lance pas de dés, ne demande pas l'intention pour des objets — c'est une ouverture narrative.)"
                 : userMsg,
-          history: await refreshHistory(input.sessionId, input.history),
+          history,
           player: input.player,
           companions: input.companions,
           worldSummary: input.worldSummary,
           universe: input.universe,
         }),
-      );
-      yield { type: 'turn_end', actor: { kind: 'narrator' } };
+      });
+      yield { type: 'turn_end', actor };
       // After narrator: combat may have started (start_combat tool). Loop and check.
       const newState = await getActiveCombatState(input.sessionId).catch(() => null);
       userMsg = '';
@@ -85,19 +90,23 @@ export async function* runTurnLoop(input: TurnLoopInput): AsyncGenerator<Orchest
     if (cur.kind === 'pc') {
       if (userMsg) {
         // Player spoke in combat → narrator resolves their action
-        yield { type: 'turn_start', actor: { kind: 'narrator' } };
-        yield* forwardWithoutDone(
-          runGmTurn({
+        const actor = { kind: 'narrator' } as const;
+        yield { type: 'turn_start', actor };
+        yield* forwardAndPersist({
+          sessionId: input.sessionId,
+          actor,
+          history,
+          events: runGmTurn({
             sessionId: input.sessionId,
             userMessage: userMsg,
-            history: await refreshHistory(input.sessionId, input.history),
+            history,
             player: input.player,
             companions: input.companions,
             worldSummary: input.worldSummary,
             universe: input.universe,
           }),
-        );
-        yield { type: 'turn_end', actor: { kind: 'narrator' } };
+        });
+        yield { type: 'turn_end', actor };
         userMsg = '';
         continue;
       }
@@ -105,14 +114,20 @@ export async function* runTurnLoop(input: TurnLoopInput): AsyncGenerator<Orchest
     }
 
     if (cur.kind === 'npc') {
-      yield { type: 'turn_start', actor: { kind: 'npc', id: cur.id, name: cur.name } };
+      const actor = { kind: 'npc', id: cur.id, name: cur.name } as const;
+      yield { type: 'turn_start', actor };
       try {
-        yield* runNpcTurn({
+        yield* forwardAndPersist({
           sessionId: input.sessionId,
-          npc: cur,
-          combatState: state,
-          history: await refreshHistory(input.sessionId, input.history),
-          universe: input.universe ?? 'dnd5e',
+          actor,
+          history,
+          events: runNpcTurn({
+            sessionId: input.sessionId,
+            npc: cur,
+            combatState: state,
+            history,
+            universe: input.universe ?? 'dnd5e',
+          }),
         });
       } catch (err) {
         if (process.env.NODE_ENV !== 'production') console.warn('[orchestrator.npc]', err);
@@ -120,7 +135,7 @@ export async function* runTurnLoop(input: TurnLoopInput): AsyncGenerator<Orchest
         const result = await executePassTurn(input.sessionId);
         for (const ev of result.events) yield ev;
       }
-      yield { type: 'turn_end', actor: { kind: 'npc', id: cur.id, name: cur.name } };
+      yield { type: 'turn_end', actor };
       continue;
     }
 
@@ -137,13 +152,20 @@ export async function* runTurnLoop(input: TurnLoopInput): AsyncGenerator<Orchest
         const turn = await respondAsCompanion({
           sessionId: input.sessionId,
           character: companion,
-          history: await refreshHistory(input.sessionId, input.history),
+          history,
           combatState: state,
           combatBlock: renderCombatBlock(state),
           universe: input.universe,
           executeRoll,
         });
         if (turn.text) {
+          const row = await persistCompanionMessage({
+            sessionId: input.sessionId,
+            characterId: cur.id,
+            characterName: cur.name,
+            content: turn.text,
+          });
+          if (row) history.push(row);
           yield {
             type: 'companion',
             characterId: cur.id,
@@ -166,35 +188,41 @@ export async function* runTurnLoop(input: TurnLoopInput): AsyncGenerator<Orchest
   }
 }
 
-/**
- * Forward an inner agent's events but suppress its `done` marker — the
- * orchestrator emits `turn_end` instead, and a single `done` at the end of
- * the entire stream from the SSE route.
- */
-async function* forwardWithoutDone(iter: AsyncGenerator<GmEvent>): AsyncGenerator<GmEvent> {
-  for await (const ev of iter) {
+async function* forwardAndPersist(input: {
+  sessionId: string;
+  actor: ActorRef;
+  history: MessageRow[];
+  events: AsyncGenerator<GmEvent>;
+}): AsyncGenerator<GmEvent> {
+  let text = '';
+  const flushActorText = async () => {
+    const row = await persistActorMessage({
+      sessionId: input.sessionId,
+      actor: input.actor,
+      content: text,
+    });
+    if (row) input.history.push(row);
+    text = '';
+  };
+
+  for await (const ev of input.events) {
     if (ev.type === 'done') continue;
+    if (ev.type === 'text_delta') {
+      text += ev.delta;
+    } else if (ev.type === 'companion') {
+      await flushActorText();
+      const row = await persistCompanionMessage({
+        sessionId: input.sessionId,
+        characterId: ev.characterId,
+        characterName: ev.characterName,
+        content: ev.content,
+      });
+      if (row) input.history.push(row);
+    }
     yield ev;
   }
-}
 
-/**
- * Refetch the messages table so chained turns see the just-persisted output
- * of previous turns. Falls back to the snapshot we got at the start of the
- * orchestrator if the refetch fails.
- */
-async function refreshHistory(sessionId: string, fallback: MessageRow[]): Promise<MessageRow[]> {
-  try {
-    const supabase = createSupabaseServiceClient();
-    const { data } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('session_id', sessionId)
-      .order('created_at', { ascending: true });
-    return (data ?? fallback) as MessageRow[];
-  } catch {
-    return fallback;
-  }
+  await flushActorText();
 }
 
 // Re-export CombatState for ergonomic imports from consumers (route handler).

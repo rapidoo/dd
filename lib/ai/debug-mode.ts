@@ -23,6 +23,7 @@ import type { CharacterRow } from '../db/types';
 import { parseDiceExpression, rollD20, rollExpression } from '../rules/dice';
 import type { ConditionType } from '../rules/types';
 import { getActiveCombatState, getActiveEncounter, startEncounter } from '../server/combat-loop';
+import { persistCompanionMessage } from '../server/message-persistence';
 import { respondAsCompanion } from './companion-agent';
 import type { DiceRollRecord, GmEvent } from './gm-agent';
 import { executeRoll, renderCombatBlock } from './gm-agent';
@@ -368,6 +369,14 @@ export async function* runDebugCommand(
         combatBlock: renderCombatBlock(compState),
         executeRoll,
       });
+      if (turn.text) {
+        await persistCompanionMessage({
+          sessionId,
+          characterId: comp.id,
+          characterName: comp.name,
+          content: turn.text,
+        });
+      }
       for (const ev of turn.events) yield ev;
       if (turn.text) {
         yield {

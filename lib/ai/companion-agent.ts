@@ -1,4 +1,3 @@
-import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow, MessageRow, Universe } from '../db/types';
 import type { CombatState } from '../server/combat-loop';
 import type { GmEvent } from './events';
@@ -9,14 +8,8 @@ import { executePassTurn, parseToolInput, passTurnSchema } from './tool-executor
 import { COMPANION_TOOLS, type RequestRollInput } from './tools';
 import { buildCompanionPrompt } from './universe';
 
-function formatPersona(persona: Record<string, unknown> | null): string {
-  if (!persona) return 'inconnue';
-  if (typeof persona.notes === 'string') return persona.notes;
-  return JSON.stringify(persona);
-}
-
 export interface CompanionTurnResult {
-  /** Final narrative text the companion produced (already persisted). */
+  /** Final narrative text the companion produced. Persistence is owned by callers. */
   text: string;
   /** Events to forward upward (dice rolls, combat updates, …). */
   events: GmEvent[];
@@ -26,6 +19,16 @@ export interface CompanionTurnResult {
  * Companion turn — runs a small tool-use loop so the companion can roll its
  * own attacks and damages just like the GM does. The caller injects
  * `executeRoll` to avoid a circular import with gm-agent.
+ *
+ * IMPORTANT — persistence is the caller's responsibility. This function does
+ * NOT write the returned `text` to the `messages` table. Every caller must
+ * pass the result through `persistCompanionMessage` (or equivalent) to record
+ * the companion's reply, otherwise the message is lost from chat history and
+ * the next turn's context. Current callers:
+ *   - `lib/server/turn-orchestrator.ts` (combat companion turn)
+ *   - `lib/server/turn-orchestrator.ts:forwardAndPersist` (GM `prompt_companion` tool)
+ *   - `lib/ai/debug-mode.ts` (`/debug companion` command)
+ *   - `lib/server/companion-actions.ts:promptCompanion` (server action)
  */
 export async function respondAsCompanion(opts: {
   sessionId: string;
@@ -117,13 +120,5 @@ export async function respondAsCompanion(opts: {
     return { text: '', events };
   }
 
-  const supabase = createSupabaseServiceClient();
-  await supabase.from('messages').insert({
-    session_id: opts.sessionId,
-    author_kind: 'character',
-    author_id: opts.character.id,
-    content: text,
-    metadata: { character_name: opts.character.name },
-  });
   return { text, events };
 }

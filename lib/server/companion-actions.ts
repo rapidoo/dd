@@ -7,6 +7,7 @@ import { createSupabaseServerClient, createSupabaseServiceClient } from '../db/s
 import type { CharacterRow, MessageRow, Universe } from '../db/types';
 import { requireUser } from './auth';
 import { getActiveCombatState } from './combat-loop';
+import { persistCompanionMessage } from './message-persistence';
 
 const schema = z.object({
   sessionId: z.string().uuid(),
@@ -75,6 +76,14 @@ export async function promptCompanion(input: {
       universe: campaign?.universe ?? null,
       executeRoll,
     });
+    if (turn.text) {
+      await persistCompanionMessage({
+        sessionId: parsed.data.sessionId,
+        characterId: character.id,
+        characterName: character.name,
+        content: turn.text,
+      });
+    }
     return { ok: true, characterName: character.name, content: turn.text };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'LLM error' };

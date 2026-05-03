@@ -5,12 +5,7 @@ import { Stat } from '../../../components/ui/stat';
 import { createSupabaseServerClient } from '../../../lib/db/server';
 import type { CharacterRow, SessionRow, Universe } from '../../../lib/db/types';
 import { getModuleTemplate } from '../../../lib/modules/templates';
-import {
-  CLASSES,
-  getClassesForUniverse,
-  getSpeciesForUniverse,
-  SPECIES,
-} from '../../../lib/rules/srd';
+import { getClassesForUniverse, getSpeciesForUniverse } from '../../../lib/rules/srd';
 import { requireUser } from '../../../lib/server/auth';
 import { getCampaign } from '../../../lib/server/campaigns';
 
