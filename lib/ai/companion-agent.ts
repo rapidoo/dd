@@ -1,8 +1,10 @@
 import { createSupabaseServiceClient } from '../db/server';
-import type { CharacterRow, CombatEncounterRow, MessageRow } from '../db/types';
+import type { CharacterRow, MessageRow } from '../db/types';
+import type { CombatState } from '../server/combat-loop';
 import type { GmEvent } from './gm-agent';
 import { llm } from './llm';
 import type { ChatMessage, ToolResultIn } from './llm/types';
+import { sanitizeNarration } from './sanitize';
 import { COMPANION_TOOLS, type RequestRollInput } from './tools';
 
 const COMPANION_SYSTEM_BASE = (
@@ -55,7 +57,7 @@ export async function respondAsCompanion(opts: {
   character: CharacterRow;
   history: MessageRow[];
   hint?: string;
-  encounter: CombatEncounterRow | null;
+  combatState: CombatState | null;
   /** Renders an "Initiative …" block when an encounter is active. */
   combatBlock: string;
   /** Roll executor injected by gm-agent. Same impl the GM uses. */
@@ -96,7 +98,7 @@ export async function respondAsCompanion(opts: {
       break;
     }
 
-    const fullText = response.text.trim();
+    const fullText = sanitizeNarration(response.text.trim());
     if (fullText) textParts.push(fullText);
 
     if (response.stopReason !== 'tool_use') break;

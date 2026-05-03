@@ -6,7 +6,7 @@ import { executeRoll, renderCombatBlock } from '../ai/gm-agent';
 import { createSupabaseServerClient, createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow, MessageRow } from '../db/types';
 import { requireUser } from './auth';
-import { activeEncounter } from './combat';
+import { getActiveCombatState } from './combat-loop';
 
 const schema = z.object({
   sessionId: z.string().uuid(),
@@ -57,14 +57,14 @@ export async function promptCompanion(input: {
     .order('created_at', { ascending: true });
 
   try {
-    const encounter = await activeEncounter(parsed.data.sessionId).catch(() => null);
+    const combatState = await getActiveCombatState(parsed.data.sessionId).catch(() => null);
     const turn = await respondAsCompanion({
       sessionId: parsed.data.sessionId,
       character: character as CharacterRow,
       history: (history ?? []) as MessageRow[],
       hint: parsed.data.hint,
-      encounter,
-      combatBlock: renderCombatBlock(encounter),
+      combatState,
+      combatBlock: renderCombatBlock(combatState),
       executeRoll,
     });
     return { ok: true, characterName: character.name, content: turn.text };

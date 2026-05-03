@@ -50,31 +50,49 @@ des tool-calls et la tolérance aux formats JSON restent en cours d'évaluation.
 **Ne pas utiliser en prod Vercel** — l'URL localhost n'est pas joignable depuis
 le déploiement.
 
-| Rôle | Modèle | Taille |
-|---|---|---|
-| BUILDER | `gemma4:31b` | 20 GB |
-| GM | `gemma4:26b` | 18 GB |
-| COMPANION | `gemma4:26b` | 18 GB (même modèle que GM, évite un rechargement en RAM) |
-| UTIL | `gemma4:e2b` | 7.2 GB |
+| Rôle | Modèle | Taille | Notes |
+|---|---|---|---|
+| BUILDER | `gemma4:e4b` | 9.6 GB | Réponses courtes (noms, persona) — pas besoin de raisonnement |
+| GM | `gemma4:26b` | 18 GB | Modèle de raisonnement — `think:false` envoyé par défaut |
+| COMPANION | `gemma4:26b` | 18 GB | Même modèle que GM (évite un rechargement en RAM) |
+| UTIL | `gemma4:e4b` | 9.6 GB | Concierge + résumé roulant |
 
 Setup local :
 ```bash
 ollama serve
-ollama pull gemma4:31b gemma4:26b gemma4:e2b
+ollama pull gemma4:e4b gemma4:26b
 # .env.local :
 LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434   # défaut, optionnel
 # (ANTHROPIC_API_KEY devient optionnelle dans ce mode)
 pnpm dev
 ```
 
+Override par rôle (utile pour benchmarker un autre tag gemma4) :
+```bash
+LLM_MODEL_BUILDER=gemma4:31b   # si vous voulez la qualité maxi pour la création
+LLM_MODEL_GM=gemma4:e4b        # plus rapide, qualité narrative moindre
+LLM_MODEL_COMPANION=gemma4:26b
+LLM_MODEL_UTIL=gemma4:e4b
+```
+
 Limites connues du mode Ollama :
+- **Modèles de raisonnement gemma4:26b/:31b** : ils émettent ~150 tokens de
+  pensée cachée avant la réponse visible. L'adaptateur envoie automatiquement
+  `think: false` (silencieusement ignoré sur les modèles non-raisonnement comme
+  e4b) ; sinon les courts `maxTokens` budgétés par les Server Actions
+  (ex. `suggestName` à 40) renvoient une réponse vide.
 - Les tool-calls dépendent du support du modèle (erreur typée
-  `model_no_tool_support` si un modèle gemma4 ne le gère pas encore).
+  `model_no_tool_support` si un tag gemma4 ne le gère pas) — e4b, 26b et 31b
+  sont vérifiés tool-capable.
 - Le concierge utilise `format: 'json'` pour forcer un JSON propre ; les
   échecs éventuels sont loggés côté serveur (`[concierge] no_json` /
   `schema_invalid` / …) — surveillez la console `pnpm dev`.
 - Les modèles tournent en non-streaming (contrairement au streaming SSE
   d'Anthropic) ; la narration apparaît en un bloc à la fin du tour.
+- Une réponse tronquée (budget `maxTokens` atteint) est désormais remontée
+  via `stopReason: 'max_tokens'` — utile pour distinguer une vraie réponse
+  vide d'une coupure.
 
 ## Démarrer en local
 

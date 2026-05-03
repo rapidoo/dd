@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { createSupabaseServiceClient } from '../db/server';
-import type { CharacterRow, CombatEncounterRow, MessageRow } from '../db/types';
+import type { CharacterRow, MessageRow } from '../db/types';
 import {
   type EntityKind,
   listEntitiesForCampaign,
@@ -11,44 +11,44 @@ import { parseDiceExpression, rollD20, rollExpression } from '../rules/dice';
 import { CONDITION_TYPES, type ConditionType } from '../rules/types';
 import { weaponAttack } from '../rules/weapon-attack';
 import {
-  activeEncounter,
-  advanceTurnEncounter,
-  applyDamageToCombatant,
-  type Combatant,
-  endCombat,
-  healCombatant,
-  mutateEncounter,
-  startCombat,
-  toggleCondition,
-} from '../server/combat';
+  advanceUntilNextActor,
+  applyConditionToParticipant,
+  applyDamageToParticipant,
+  type CombatState,
+  getActiveCombatState,
+  type Participant,
+  startEncounter,
+} from '../server/combat-loop';
 import type { InventoryItem } from '../server/inventory-actions';
 import { respondAsCompanion } from './companion-agent';
 import { llm } from './llm';
 import type { ChatMessage, ToolCallOut, ToolResultIn } from './llm/types';
 import { compactHistory } from './rolling-summary';
+import { hasTextualToolCall, sanitizeNarration } from './sanitize';
 import { campaignIdOfSession, characterInSession, combatantBelongsToSession } from './tenant-guard';
 import { GM_TOOLS, type RecordEntityInput, type RequestRollInput } from './tools';
 
-const GM_SYSTEM_PROMPT = `Tu es "Le Conteur", MJ d'une partie de D&D 5e SRD. Style dark fantasy cozy, français, 3-6 phrases par tour, pas de markdown, pas d'emojis, italique <em>…</em> pour les paroles de PNJ. Théâtre de l'esprit (pas de grille).
+const GM_SYSTEM_PROMPT = `Tu es "Le Conteur", MJ d'une partie de D&D 5e SRD. Style dark fantasy cozy, français, 3-6 phrases par tour, pas de markdown, pas d'emojis. Format texte brut UNIQUEMENT — la SEULE balise autorisée est <em>…</em> pour les paroles de PNJ. Aucune autre balise HTML (pas de <span>, <p>, <i>, <strong>, <br>, ni styles inline). Théâtre de l'esprit (pas de grille).
 
-Jets : TOUJOURS via l'outil request_roll avant de décrire l'issue. Jamais "Fais un jet", "Lance un dé", "Jette les dés".
+RÈGLE CRITIQUE — Outils : tu disposes d'outils (request_roll, start_combat, apply_damage, apply_condition, prompt_companion, grant_item, adjust_currency, cast_spell, trigger_rest, record_entity, recall_memory). Tu les invoques UNIQUEMENT via le canal tool_calls structuré. N'écris JAMAIS leur nom dans la narration — pas de "start_combat(...)", pas de "apply_damage(...)" en prose. Si tu as besoin d'un outil, émets un tool_call ; sinon raconte simplement la scène.
 
-Chaîne attack → damage : sur hit/crit, enchaîne IMMÉDIATEMENT request_roll(kind="damage", dice="<arme+mod>", target_combatant_id="<UUID cible>"). Le serveur APPLIQUE automatiquement les dégâts — NE RAPPELLE PAS apply_damage après. Sur crit, double les dés ("2d8+3" au lieu de "1d8+3"). Nat 20 = critique, nat 1 = complication.
+Combat — pilotage SERVEUR : le serveur enchaîne automatiquement les tours (skip des combattants à 0 PV inclus) et termine la rencontre quand tous les ennemis sont à terre. Tu n'as pas d'outil "tour suivant" ni "fin de combat". Sur ton tour ou celui d'un PNJ : narre la scène, lance le jet via tool_call, c'est tout. Le serveur fait le reste.
 
-Soins : pour un sort/objet de soin, utilise kind="heal" (PAS "damage") avec target_combatant_id. Ex : Soins niv 1 → request_roll(kind="heal", dice="1d8+3", target_combatant_id="<PJ>"). Le serveur remonte les PV automatiquement. Utiliser kind="damage" avec un target_combatant_id sur un allié baisserait ses PV — c'est ce que tu veux SEULEMENT si c'est un coup reçu.
+Jets de dés : TOUJOURS via l'outil de jet avant de décrire l'issue. Jamais "Fais un jet", "Lance un dé", "Jette les dés" en texte.
 
-PV & états : apply_damage(combatant_id, amount) pour dégâts/soins (négatif=soin). apply_condition(combatant_id, condition, add). Ne JAMAIS écrire les PV dans le texte — l'UI les affiche depuis la DB. start_combat seulement pour rencontres avec initiative.
+Chaîne attaque → dégâts : sur touche ou critique, enchaîne IMMÉDIATEMENT un jet de dégâts (kind="damage", target_combatant_id=<UUID cible>) via tool_call. Le serveur APPLIQUE automatiquement les dégâts — pas besoin d'appeler apply_damage en plus. Sur critique, double les dés d'arme. Nat 20 = critique, nat 1 = complication.
 
-Tours en combat (quand un bloc "Combat actif" est présent) : tu DOIS dérouler l'initiative, pas attendre que le joueur le fasse.
-- Tour PNJ : tu décides son action, tu appelles request_roll(kind="attack", target_ac=…, target_combatant_id=<PJ/compagnon>), enchaînes damage si hit, narres, puis next_turn.
-- Tour PJ : si le joueur a parlé tu résous, sinon tu décris l'instant et tu attends. Après résolution → next_turn.
-- Tour compagnon : prompt_companion(character_id) puis next_turn quand il a fini d'agir.
-- Cible à 0 PV : tu narres sa chute mais next_turn la saute naturellement (l'ordre la garde).
-- Tu enchaînes les tours PNJ d'affilée jusqu'à retomber sur un PJ — pas d'attente entre deux PNJ. end_combat dès que tous les PNJ sont à 0.
+Soins : utilise kind="heal" (pas "damage") avec target_combatant_id pour faire remonter les PV. Le serveur applique automatiquement.
 
-Magie/repos : cast_spell(character_id, level) consomme un emplacement. trigger_rest(character_id, "short"|"long").
+PV & états : utilise les outils dégâts/soins/conditions. Ne JAMAIS écrire les PV en texte — l'UI les affiche depuis la DB.
 
-Butin : narre librement qui ramasse/donne/dépense quoi — un concierge post-tour met à jour bourses et inventaires. Tu peux quand même appeler grant_item/adjust_currency si un transfert doit se faire en plein tour (dépense AVANT un gain).
+Tours en combat (quand un bloc "Combat actif" est présent) :
+- Tour PNJ : décide son action, fais le jet d'attaque (target_ac, target_combatant_id), enchaîne les dégâts si touche, narre. Le serveur passera au combattant suivant tout seul.
+- Tour PJ : si le joueur a parlé tu résous, sinon décris l'instant et attends son input.
+- Tour compagnon : donne-lui la parole via l'outil compagnon. Le serveur enchaînera.
+- Cible à 0 PV : narre sa chute. Le serveur la saute et termine la rencontre quand tous les PNJ sont à 0.
+
+Butin : narre librement qui ramasse/donne/dépense quoi — un concierge post-tour met à jour bourses et inventaires. Tu peux quand même utiliser les outils objet/bourse si un transfert doit se faire en plein tour (dépense AVANT un gain).
 
 Ne résume pas l'action du joueur — enchaîne sur les conséquences. Conclus souvent par "Que fais-tu ?".`;
 
@@ -74,7 +74,11 @@ export type GmEvent =
   | { type: 'companion'; characterId: string; characterName: string; content: string }
   | { type: 'combat_started'; combatId: string }
   | { type: 'combat_ended' }
-  | { type: 'combat_update' }
+  | { type: 'combat_state'; state: CombatState }
+  // Light "party may have changed" signal for non-combat mutations
+  // (inventory, currency, spell slots, rest). Kept distinct from combat_state
+  // because no combat payload exists for these.
+  | { type: 'party_update' }
   | { type: 'done' }
   | { type: 'error'; message: string };
 
@@ -116,8 +120,8 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
         return [];
       })
     : [];
-  const encounter = await activeEncounter(input.sessionId).catch((err) => {
-    if (process.env.NODE_ENV !== 'production') console.warn('[combat.activeEncounter]', err);
+  const combatState = await getActiveCombatState(input.sessionId).catch((err) => {
+    if (process.env.NODE_ENV !== 'production') console.warn('[combat.getActiveCombatState]', err);
     return null;
   });
 
@@ -154,7 +158,7 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     rollingSummary,
     knownEntities,
     input.universe ?? 'dnd5e',
-    encounter,
+    combatState,
   );
 
   if (process.env.NODE_ENV !== 'production') {
@@ -195,7 +199,10 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
     // a stubborn model can't exhaust the tool budget.
     if (hasRollDelegation(fullText) && !calledRequestRoll) {
       if (repromptRetries >= MAX_REPROMPT_RETRIES) {
-        if (fullText) yield { type: 'text_delta', delta: fullText };
+        if (fullText) {
+          const cleaned = sanitizeNarration(fullText);
+          if (cleaned) yield { type: 'text_delta', delta: cleaned };
+        }
         yield { type: 'done' };
         return;
       }
@@ -206,6 +213,32 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
         role: 'user',
         content:
           'Tu viens d\'écrire une formule qui délègue un jet au joueur (ex: "Fais un jet", "Lance un dé", "Jette les dés"). C\'est interdit. Annule cette narration et appelle request_roll MAINTENANT, puis reprends la suite en fonction du résultat.',
+      });
+      continue;
+    }
+
+    // Textual tool-call safeguard. Local models (gemma4) sometimes write
+    // `start_combat(npcs=[...])` or a bare `next_turn` line in the narration
+    // instead of emitting a structured tool_call. The combat would never
+    // actually start. Detect, reprompt, and retry once or twice.
+    if (
+      response.toolCalls.length === 0 &&
+      hasTextualToolCall(fullText) &&
+      repromptRetries < MAX_REPROMPT_RETRIES
+    ) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[gm] textual tool-call detected — reprompting');
+      }
+      repromptRetries++;
+      toolIterations--;
+      messages.push({
+        role: 'assistant',
+        content: "(tour rejeté : outil écrit en texte au lieu d'un tool_call)",
+      });
+      messages.push({
+        role: 'user',
+        content:
+          'Tu as écrit le nom d\'un outil dans la narration (ex: "start_combat(...)" ou "next_turn"). C\'est interdit — le joueur le voit en clair et le serveur n\'exécute rien. Reprends ce tour : invoque l\'outil via le canal tool_calls structuré, et laisse la narration en texte naturel uniquement.',
       });
       continue;
     }
@@ -229,7 +262,10 @@ export async function* runGmTurn(input: GmTurnInput): AsyncGenerator<GmEvent> {
       continue;
     }
 
-    if (fullText) yield { type: 'text_delta', delta: fullText };
+    if (fullText) {
+      const cleaned = sanitizeNarration(fullText);
+      if (cleaned) yield { type: 'text_delta', delta: cleaned };
+    }
 
     if (response.stopReason !== 'tool_use') {
       yield { type: 'done' };
@@ -508,7 +544,7 @@ async function executeTool(
         .from('characters')
         .select('*')
         .eq('campaign_id', session.campaign_id);
-      const combat = await startCombat({
+      const initial = await startEncounter({
         sessionId,
         npcs: input.npcs.map((n) => ({
           name: n.name,
@@ -518,14 +554,22 @@ async function executeTool(
         })),
         characters: (characters ?? []) as CharacterRow[],
       });
+      // Server-authoritative loop: immediately advance to the first acting
+      // combatant (skipping any KO at the head, which shouldn't happen on
+      // start but defensive-by-default).
+      const advanced = await advanceFromStart(sessionId, initial);
       return {
         result: {
-          combat_id: combat.id,
-          round: combat.round,
-          order: combat.initiative_order,
-          combatants: combat.combatants,
+          combat_id: advanced.state?.combatId ?? initial.combatId,
+          round: advanced.state?.round ?? initial.round,
+          current_actor: currentActorId(advanced.state ?? initial),
+          ended: advanced.ended,
         },
-        events: [{ type: 'combat_started', combatId: combat.id }],
+        events: [
+          { type: 'combat_started', combatId: initial.combatId },
+          { type: 'combat_state', state: advanced.state ?? initial },
+          ...(advanced.ended ? ([{ type: 'combat_ended' }] as GmEvent[]) : []),
+        ],
       };
     }
     case 'apply_damage': {
@@ -535,66 +579,62 @@ async function executeTool(
       if (!(await combatantBelongsToSession(sessionId, input.combatant_id))) {
         return { result: { error: 'Cible hors campagne' }, events: [] };
       }
-      const enc = await activeEncounter(sessionId);
-      if (enc) {
-        const next = await mutateEncounter(enc.id, (e) =>
-          input.amount >= 0
-            ? applyDamageToCombatant(e, input.combatant_id, input.amount)
-            : healCombatant(e, input.combatant_id, -input.amount),
-        );
-        return {
-          result: { combatants: next.combatants },
-          events: [{ type: 'combat_update' }],
-        };
+      const dmg = await applyDamageToParticipant(sessionId, input.combatant_id, input.amount);
+      if (!dmg.ok) return { result: { error: dmg.error }, events: [] };
+      const events: GmEvent[] = [];
+      if (dmg.state) events.push({ type: 'combat_state', state: dmg.state });
+      // After NPC damage, give the cursor a chance to advance (skip dead, auto-end).
+      const targetEntry = dmg.state?.participants.find((p) => p.id === input.combatant_id);
+      if (targetEntry?.kind === 'npc' && targetEntry.currentHP <= 0) {
+        const adv = await advanceUntilNextActor(sessionId);
+        if (adv.state) events.push({ type: 'combat_state', state: adv.state });
+        if (adv.ended) events.push({ type: 'combat_ended' });
       }
-      // No active encounter — operate directly on the character row.
-      return await applyDamageToCharacter(input.combatant_id, input.amount);
+      return {
+        result: { ok: true, current_hp: dmg.currentHP, max_hp: dmg.maxHP },
+        events,
+      };
     }
     case 'apply_condition': {
       const p = parseToolInput(applyConditionSchema, block.input);
       if (!p.ok) return { result: p.result, events: [] };
-      const input = {
-        ...p.data,
-        condition: p.data.condition as ConditionType,
-      };
+      const input = { ...p.data, condition: p.data.condition as ConditionType };
       if (!(await combatantBelongsToSession(sessionId, input.combatant_id))) {
         return { result: { error: 'Cible hors campagne' }, events: [] };
       }
-      const enc = await activeEncounter(sessionId);
-      if (enc) {
-        const next = await mutateEncounter(enc.id, (e) =>
-          toggleCondition(e, input.combatant_id, input.condition, input.add, input.duration_rounds),
-        );
-        return {
-          result: { combatants: next.combatants },
-          events: [{ type: 'combat_update' }],
-        };
-      }
-      return await toggleConditionOnCharacter(
+      const cond = await applyConditionToParticipant(
+        sessionId,
         input.combatant_id,
         input.condition,
         input.add,
         input.duration_rounds,
       );
-    }
-    case 'next_turn': {
-      const enc = await activeEncounter(sessionId);
-      if (!enc) return { result: { error: 'Aucun combat actif' }, events: [] };
-      const next = await mutateEncounter(enc.id, advanceTurnEncounter);
-      return {
-        result: { round: next.round, current_turn_index: next.current_turn_index },
-        events: [{ type: 'combat_update' }],
-      };
-    }
-    case 'end_combat': {
-      const enc = await activeEncounter(sessionId);
-      if (!enc) return { result: { error: 'Aucun combat actif' }, events: [] };
-      await endCombat(enc.id);
-      return { result: { ok: true }, events: [{ type: 'combat_ended' }] };
+      if (!cond.ok) return { result: { error: cond.error }, events: [] };
+      const events: GmEvent[] = [];
+      if (cond.state) events.push({ type: 'combat_state', state: cond.state });
+      return { result: { ok: true }, events };
     }
     default:
       return { result: { error: `Unknown tool: ${block.name}` }, events: [] };
   }
+}
+
+function currentActorId(state: CombatState): string | null {
+  const actor = state.participants.find((p) => p.isCurrent);
+  return actor?.id ?? null;
+}
+
+async function advanceFromStart(
+  sessionId: string,
+  initial: CombatState,
+): Promise<{ ended: boolean; state: CombatState | null }> {
+  // If the very first slot is already KO (shouldn't happen but stay defensive),
+  // walk forward. Otherwise the initial state is fine and no advance is needed.
+  const firstActor = initial.participants[initial.currentTurnIndex];
+  if (firstActor && firstActor.currentHP > 0) {
+    return { ended: false, state: initial };
+  }
+  return await advanceUntilNextActor(sessionId);
 }
 
 function buildSystemPrompt(
@@ -604,7 +644,7 @@ function buildSystemPrompt(
   rollingSummary?: string | null,
   knownEntities?: Array<{ name: string; kind: string; short_description: string | null }>,
   universe?: Universe,
-  encounter?: CombatEncounterRow | null,
+  combatState?: CombatState | null,
 ): string {
   // Default to dnd5e if universe is not provided
   const effectiveUniverse = universe ?? 'dnd5e';
@@ -647,7 +687,7 @@ function buildSystemPrompt(
     ? `\nJusqu'ici dans cette veillée (résumé, les faits sont canon) :\n${clipText(rollingSummary.trim(), 3000)}\n`
     : '';
   const memoryBlock = buildMemoryBlock(knownEntities ?? []);
-  const combatBlock = renderCombatBlock(encounter ?? null);
+  const combatBlock = renderCombatBlock(combatState ?? null);
 
   // Build universe-specific system prompt
   const basePrompt =
@@ -665,27 +705,31 @@ ${partyLines.join('\n')}
 Quand un compagnon est présent, pense à lui laisser la parole régulièrement via prompt_companion — décris une scène, puis passe-lui le micro (indique character_id et éventuellement un hint).`;
 }
 
-const GM_SYSTEM_PROMPT_WITCHER = `Tu es "Le Conteur", MJ d'une partie dans l'univers de The Witcher. Style sombre et réaliste, français, 3-6 phrases par tour, pas de markdown, pas d'emojis, italique <em>…</em> pour les paroles de PNJ. Théâtre de l'esprit.
+const GM_SYSTEM_PROMPT_WITCHER = `Tu es "Le Conteur", MJ d'une partie dans l'univers de The Witcher. Style sombre et réaliste, français, 3-6 phrases par tour, pas de markdown, pas d'emojis. Format texte brut UNIQUEMENT — la SEULE balise autorisée est <em>…</em> pour les paroles de PNJ. Aucune autre balise HTML. Théâtre de l'esprit.
 
 Règles Witcher : utilise les termes adaptés — sorceleurs (guerriers-mages), sources (magie du chaos), signes (sorts), potions, alchimie, contrats de chasse. Les races : humains, elfes, nains, demi-elfes, halflings. Pas de classes D&D traditionnelles : les personnages sont des sorceleurs, mages, voleurs, éclaireurs, guerriers, etc.
 
-Jets : TOUJOURS via l'outil request_roll avant de décrire l'issue. Jamais "Fais un jet", "Lance un dé", "Jette les dés".
+RÈGLE CRITIQUE — Outils : tu disposes d'outils (request_roll, start_combat, apply_damage, apply_condition, prompt_companion, grant_item, adjust_currency, trigger_rest, record_entity, recall_memory). Tu les invoques UNIQUEMENT via le canal tool_calls structuré. N'écris JAMAIS leur nom dans la narration en prose. Si tu as besoin d'un outil, émets un tool_call ; sinon raconte simplement la scène.
 
-Chaîne attack → damage : sur hit/crit, enchaîne IMMÉDIATEMENT request_roll(kind="damage", dice="<arme+mod>", target_combatant_id="<UUID cible>"). Le serveur APPLIQUE automatiquement les dégâts. Sur crit, double les dés ("2d6+3" au lieu de "1d6+3").
+Combat — pilotage SERVEUR : le serveur enchaîne automatiquement les tours (skip des combattants à 0 PV inclus) et termine la rencontre quand tous les ennemis sont à terre. Pas d'outil "tour suivant" ni "fin de combat". Sur ton tour ou celui d'un PNJ : narre, lance le jet via tool_call, c'est tout.
 
-Soins : pour un sort/objet de soin, utilise kind="heal" avec target_combatant_id. Ex : Soins → request_roll(kind="heal", dice="1d8+3", target_combatant_id="<PJ>").
+Jets de dés : TOUJOURS via l'outil de jet avant de décrire l'issue. Jamais "Fais un jet" / "Lance un dé" / "Jette les dés" en texte.
 
-PV & états : apply_damage(combatant_id, amount) pour dégâts/soins (négatif=soin). apply_condition(combatant_id, condition, add).
+Chaîne attaque → dégâts : sur touche/crit, enchaîne IMMÉDIATEMENT un jet de dégâts (kind="damage", target_combatant_id=<UUID cible>) via tool_call. Le serveur applique automatiquement. Sur crit, double les dés d'arme.
 
-Tours en combat (quand un bloc "Combat actif" est présent) : tu DOIS dérouler l'initiative.
-- Tour PNJ : tu décides son action, request_roll(kind="attack", target_ac=…, target_combatant_id=<PJ/compagnon>), damage si hit, narres, next_turn.
-- Tour PJ : tu résous s'il a parlé, sinon tu décris et tu attends. next_turn après résolution.
-- Tour compagnon : prompt_companion(character_id), puis next_turn.
-- Cible à 0 PV : narre la chute, next_turn la saute. end_combat dès que tous les PNJ sont à 0.
+Soins : kind="heal" + target_combatant_id pour faire remonter les PV.
 
-Magie : les "signes" sont la magie des sorceleurs. Pas de sorts traditionnels D&D. cast_spell n'est PAS utilisé — utilise des actions descriptives.
+PV & états : utilise les outils dégâts/conditions. Ne JAMAIS écrire les PV en texte.
 
-Butin : narre librement qui ramasse/donne/dépense quoi — un concierge post-tour met à jour bourses et inventaires.
+Tours en combat (bloc "Combat actif" présent) :
+- Tour PNJ : action, jet d'attaque (target_ac, target_combatant_id), dégâts si touche, narre. Le serveur enchaîne.
+- Tour PJ : résous s'il a parlé, sinon décris et attends son input.
+- Tour compagnon : donne-lui la parole via l'outil. Le serveur enchaîne.
+- Cible à 0 PV : narre sa chute. Le serveur saute le tour et termine quand tous les PNJ sont à 0.
+
+Magie : les "signes" sont la magie des sorceleurs. Pas de sorts traditionnels D&D — utilise des actions descriptives.
+
+Butin : narre librement qui ramasse/donne/dépense — un concierge post-tour met à jour bourses et inventaires.
 
 Ne résume pas l'action du joueur — enchaîne sur les conséquences. Conclus souvent par "Que fais-tu ?".`;
 
@@ -735,14 +779,14 @@ async function executeCompanion(
     .select('*')
     .eq('session_id', sessionId)
     .order('created_at', { ascending: true });
-  const encounter = await activeEncounter(sessionId).catch(() => null);
-  const combatBlock = renderCombatBlock(encounter);
+  const compState = await getActiveCombatState(sessionId).catch(() => null);
+  const combatBlock = renderCombatBlock(compState);
   const turn = await respondAsCompanion({
     sessionId,
     character,
     history: history ?? [],
     hint: input.hint,
-    encounter,
+    combatState: compState,
     combatBlock,
     executeRoll,
   });
@@ -811,10 +855,10 @@ export async function executeRoll(
   // Auto-apply damage to a named target. Tenant-guarded so a hallucinated
   // UUID can't touch another campaign. Works for NPC combatants too
   // (prefix `npc-` is allowed by combatantBelongsToSession).
-  // Auto-apply damage / heal when the GM targeted a combatant. The sign is
-  // derived from the kind :
-  //   kind='damage' → positive (HP down)
-  //   kind='heal'   → negative (HP up, clamped at max via applyDamageToCharacter)
+  // Auto-apply damage / heal when the GM targeted a combatant. Routes through
+  // applyDamageToParticipant which handles both NPC (jsonb) and PC (characters
+  // row, source of truth) cases. After NPC damage that puts them at 0 HP we
+  // also advance the cursor to the next living actor — server-authoritative.
   let applied: { target: string; newHp?: number; mode?: 'damage' | 'heal' } | null = null;
   const applyable =
     (input.kind === 'damage' || input.kind === 'heal') &&
@@ -825,21 +869,28 @@ export async function executeRoll(
     if (await combatantBelongsToSession(sessionId, targetId)) {
       try {
         const signed = input.kind === 'heal' ? -roll.total : roll.total;
-        // Route by id shape: NPC combatants live only in the encounter row,
-        // PC/companion HP lives in characters (and is mirrored in the
-        // encounter combatants array). applyDamageInSession picks the
-        // right path so request_roll(damage, target="npc-…") actually
-        // lowers the kobold's HP.
-        const res = await applyDamageInSession(sessionId, targetId, signed);
-        const newHp = (res.result as { current_hp?: number } | null)?.current_hp;
-        applied = { target: targetId, newHp, mode: input.kind as 'damage' | 'heal' };
-        for (const ev of res.events) events.push(ev);
-        if (process.env.NODE_ENV !== 'production') {
+        const res = await applyDamageToParticipant(sessionId, targetId, signed);
+        if (res.ok) {
+          applied = {
+            target: targetId,
+            newHp: res.currentHP,
+            mode: input.kind as 'damage' | 'heal',
+          };
+          if (res.state) events.push({ type: 'combat_state', state: res.state });
+          // If we just downed an NPC, advance the cursor (skip dead, auto-end).
+          const target = res.state?.participants.find((p) => p.id === targetId);
+          if (target?.kind === 'npc' && target.currentHP <= 0) {
+            const adv = await advanceUntilNextActor(sessionId);
+            if (adv.state) events.push({ type: 'combat_state', state: adv.state });
+            if (adv.ended) events.push({ type: 'combat_ended' });
+          }
+        } else if (process.env.NODE_ENV !== 'production') {
+          console.warn(`[gm.${input.kind}] auto-apply rejected`, res.error);
+        }
+        if (process.env.NODE_ENV !== 'production' && res.ok) {
           const verb = input.kind === 'heal' ? 'healed' : 'damaged';
           console.debug(
-            `[gm.${input.kind}] auto-${verb} ${roll.total} on ${targetId}${
-              newHp !== undefined ? ` → ${newHp} HP` : ''
-            }`,
+            `[gm.${input.kind}] auto-${verb} ${roll.total} on ${targetId} → ${res.currentHP} HP`,
           );
         }
       } catch (err) {
@@ -945,7 +996,7 @@ function buildMemoryBlock(
   return `\nMémoire (sois cohérent) :\n${lines.join('\n')}\n`;
 }
 
-const COMBATANT_KIND_LABEL: Record<Combatant['kind'], string> = {
+const PARTICIPANT_KIND_LABEL: Record<Participant['kind'], string> = {
   pc: 'PJ',
   companion: 'compagnon',
   npc: 'PNJ',
@@ -956,30 +1007,25 @@ const COMBATANT_KIND_LABEL: Record<Combatant['kind'], string> = {
  * system prompt. Without this block the model has no idea who's in
  * initiative, whose turn it is, or what target ids to pass to request_roll.
  */
-export function renderCombatBlock(encounter: CombatEncounterRow | null): string {
-  if (!encounter || encounter.status !== 'active') return '';
-  const order = encounter.initiative_order ?? [];
-  const combatants = (encounter.combatants as Combatant[]) ?? [];
-  if (order.length === 0 || combatants.length === 0) return '';
-  const byId = new Map(combatants.map((c) => [c.id, c]));
-  const currentEntry = order[encounter.current_turn_index];
-  const current = currentEntry ? byId.get(currentEntry.id) : undefined;
-  const lines = order.map((entry, idx) => {
-    const c = byId.get(entry.id);
-    if (!c) return null;
-    const cursor = idx === encounter.current_turn_index ? '▶' : ' ';
-    const kind = COMBATANT_KIND_LABEL[c.kind];
-    const hp = c.currentHP <= 0 ? `0/${c.maxHP} — abattu` : `${c.currentHP}/${c.maxHP} PV`;
+export function renderCombatBlock(state: CombatState | null): string {
+  if (!state || state.endedAt) return '';
+  const ps = state.participants;
+  if (ps.length === 0) return '';
+  const current = ps.find((p) => p.isCurrent);
+  const lines = ps.map((p, idx) => {
+    const cursor = p.isCurrent ? '▶' : ' ';
+    const kind = PARTICIPANT_KIND_LABEL[p.kind];
+    const hp = p.currentHP <= 0 ? `0/${p.maxHP} — abattu` : `${p.currentHP}/${p.maxHP} PV`;
     const conds =
-      c.conditions && c.conditions.length > 0
-        ? ` [${c.conditions.map((x) => x.type).join(', ')}]`
+      p.conditions && p.conditions.length > 0
+        ? ` [${p.conditions.map((x) => x.type).join(', ')}]`
         : '';
-    return `  ${cursor} ${idx + 1}. ${c.name} (${kind}, ${hp}, CA ${c.ac})${conds} — id="${c.id}"`;
+    return `  ${cursor} ${idx + 1}. ${p.name} (${kind}, ${hp}, CA ${p.ac})${conds} — id="${p.id}"`;
   });
   const header = current
-    ? `Combat actif — round ${encounter.round}, tour de ${current.name} (${COMBATANT_KIND_LABEL[current.kind]}).`
-    : `Combat actif — round ${encounter.round}.`;
-  return `\n${header}\nInitiative :\n${lines.filter(Boolean).join('\n')}\n`;
+    ? `Combat actif — round ${state.round}, tour de ${current.name} (${PARTICIPANT_KIND_LABEL[current.kind]}).`
+    : `Combat actif — round ${state.round}.`;
+  return `\n${header}\nInitiative :\n${lines.join('\n')}\n`;
 }
 
 function describeWeapons(character: CharacterRow): string[] {
@@ -1012,115 +1058,6 @@ function contentLength(msg: ChatMessage): number {
 export function hasRollDelegation(text: string): boolean {
   if (!text || text.length < 5) return false;
   return ROLL_DELEGATION_PATTERNS.some((re) => re.test(text));
-}
-
-/**
- * Apply HP delta to whatever combatant id is given. NPC ids (`npc-…`) live
- * only in the active encounter's combatants array; PC/companion ids are
- * UUIDs against `characters` (HP also mirrored into encounter.combatants
- * when an encounter is active).
- */
-async function applyDamageInSession(
-  sessionId: string,
-  combatantId: string,
-  amount: number,
-): Promise<{ result: unknown; events: GmEvent[] }> {
-  const isNpc = combatantId.startsWith('npc-');
-  if (isNpc) {
-    const enc = await activeEncounter(sessionId);
-    if (!enc) {
-      return { result: { error: 'PNJ ciblé sans rencontre active' }, events: [] };
-    }
-    const next = await mutateEncounter(enc.id, (e) =>
-      amount >= 0
-        ? applyDamageToCombatant(e, combatantId, amount)
-        : healCombatant(e, combatantId, -amount),
-    );
-    const c = (next.combatants as Combatant[]).find((x) => x.id === combatantId);
-    return {
-      result: { ok: true, current_hp: c?.currentHP, max_hp: c?.maxHP },
-      events: [{ type: 'combat_update' }],
-    };
-  }
-  // PC / companion : update characters row, and mirror into encounter row
-  // so the initiative panel stays in sync.
-  const charResult = await applyDamageToCharacter(combatantId, amount);
-  const enc = await activeEncounter(sessionId).catch(() => null);
-  if (enc) {
-    await mutateEncounter(enc.id, (e) =>
-      amount >= 0
-        ? applyDamageToCombatant(e, combatantId, amount)
-        : healCombatant(e, combatantId, -amount),
-    ).catch(() => {
-      // Mirror failure shouldn't fail the whole roll — characters row is
-      // the source of truth for PC HP outside combat.
-    });
-  }
-  return charResult;
-}
-
-async function applyDamageToCharacter(
-  characterId: string,
-  amount: number,
-): Promise<{ result: unknown; events: GmEvent[] }> {
-  const supabase = createSupabaseServiceClient();
-  const { data: character } = await supabase
-    .from('characters')
-    .select('id, current_hp, max_hp, temp_hp')
-    .eq('id', characterId)
-    .maybeSingle();
-  if (!character) return { result: { error: 'Personnage introuvable' }, events: [] };
-  if (amount >= 0) {
-    // Damage — absorb temp first.
-    let remaining = amount;
-    let temp = character.temp_hp;
-    if (temp > 0) {
-      const absorbed = Math.min(temp, remaining);
-      temp -= absorbed;
-      remaining -= absorbed;
-    }
-    const newCurrent = Math.max(0, character.current_hp - remaining);
-    await supabase
-      .from('characters')
-      .update({ current_hp: newCurrent, temp_hp: temp })
-      .eq('id', characterId);
-    return {
-      result: { ok: true, current_hp: newCurrent, max_hp: character.max_hp },
-      events: [{ type: 'combat_update' }],
-    };
-  }
-  const newCurrent = Math.min(character.max_hp, character.current_hp + -amount);
-  await supabase.from('characters').update({ current_hp: newCurrent }).eq('id', characterId);
-  return {
-    result: { ok: true, current_hp: newCurrent, max_hp: character.max_hp },
-    events: [{ type: 'combat_update' }],
-  };
-}
-
-async function toggleConditionOnCharacter(
-  characterId: string,
-  condition: ConditionType,
-  add: boolean,
-  durationRounds?: number,
-): Promise<{ result: unknown; events: GmEvent[] }> {
-  const supabase = createSupabaseServiceClient();
-  const { data: character } = await supabase
-    .from('characters')
-    .select('id, conditions')
-    .eq('id', characterId)
-    .maybeSingle();
-  if (!character) return { result: { error: 'Personnage introuvable' }, events: [] };
-  const existing = (character.conditions as Array<{ type: string; durationRounds?: number }>) ?? [];
-  const next = add
-    ? existing.some((c) => c.type === condition)
-      ? existing.map((c) => (c.type === condition ? { ...c, durationRounds } : c))
-      : [...existing, { type: condition, durationRounds }]
-    : existing.filter((c) => c.type !== condition);
-  await supabase.from('characters').update({ conditions: next }).eq('id', characterId);
-  return {
-    result: { ok: true, conditions: next },
-    events: [{ type: 'combat_update' }],
-  };
 }
 
 async function grantItemToCharacter(input: {
@@ -1181,7 +1118,7 @@ async function grantItemToCharacter(input: {
   await supabase.from('characters').update({ inventory: next }).eq('id', input.character_id);
   return {
     result: { ok: true, inventory: next },
-    events: [{ type: 'combat_update' }],
+    events: [{ type: 'party_update' }],
   };
 }
 
@@ -1217,7 +1154,7 @@ async function adjustCharacterCurrency(input: {
   await supabase.from('characters').update({ currency: next }).eq('id', input.character_id);
   return {
     result: { ok: true, currency: next },
-    events: [{ type: 'combat_update' }],
+    events: [{ type: 'party_update' }],
   };
 }
 
@@ -1254,7 +1191,7 @@ async function castSpellOnCharacter(
       remaining: slot.max - (slot.used + 1),
       out_of: slot.max,
     },
-    events: [{ type: 'combat_update' }],
+    events: [{ type: 'party_update' }],
   };
 }
 
@@ -1293,7 +1230,7 @@ async function triggerRestOnCharacter(
         exhaustion: nextExhaustion,
         slots_restored: true,
       },
-      events: [{ type: 'combat_update' }],
+      events: [{ type: 'party_update' }],
     };
   }
 
@@ -1328,6 +1265,6 @@ async function triggerRestOnCharacter(
       hp_gained: gained,
       current_hp: newHP,
     },
-    events: [{ type: 'combat_update' }],
+    events: [{ type: 'party_update' }],
   };
 }

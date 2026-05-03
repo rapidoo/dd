@@ -123,16 +123,6 @@ export const GM_TOOLS: ToolDef[] = [
     },
   },
   {
-    name: 'next_turn',
-    description: "Combattant suivant dans l'initiative.",
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'end_combat',
-    description: 'Termine la rencontre.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
     name: 'grant_item',
     description:
       "Ajoute/retire un objet (qty positif/négatif). Le concierge post-tour le fait aussi depuis la narration — n'appelle que pour un transfert en plein tour.",

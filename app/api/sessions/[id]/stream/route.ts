@@ -123,11 +123,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
             write('combat', { phase: 'started', combatId: ev.combatId });
           } else if (ev.type === 'combat_ended') {
             write('combat', { phase: 'ended' });
-          } else if (ev.type === 'combat_update') {
-            // Signal the client to re-fetch party state (HP, conditions,
-            // inventory) mid-stream — damage / healing / conditions just
-            // changed a character row.
-            write('combat', { phase: 'update' });
+          } else if (ev.type === 'combat_state') {
+            // Authoritative combat snapshot pushed by the server-side loop —
+            // round, current actor, full participants list with HP &
+            // conditions. UI consumes directly, no refetch needed.
+            write('combat', { phase: 'state', state: ev.state });
+          } else if (ev.type === 'party_update') {
+            // Non-combat mutation (inventory, currency, slots, rest).
+            // Client refetches party rows.
+            write('party', { phase: 'update' });
           } else if (ev.type === 'error') {
             write('error', { message: ev.message });
           } else if (ev.type === 'done') {

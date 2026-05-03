@@ -130,14 +130,34 @@ export type DiceRollRow = {
   created_at: Iso;
 };
 
+export type ParticipantKind = 'pc' | 'companion' | 'npc';
+
+export type ParticipantOrderEntry = {
+  id: string;
+  kind: ParticipantKind;
+  initiative: number;
+  dexMod: number;
+};
+
+export type NpcCombatant = {
+  id: string;
+  name: string;
+  ac: number;
+  currentHP: number;
+  maxHP: number;
+  dexMod: number;
+  conditions: Array<{ type: string; durationRounds?: number; source?: string }>;
+};
+
 export type CombatEncounterRow = {
   id: Uuid;
   session_id: Uuid;
   status: CombatStatus;
   round: number;
   current_turn_index: number;
-  initiative_order: Array<{ id: string; total: number; dexMod: number }>;
-  combatants: unknown[];
+  participants_order: ParticipantOrderEntry[];
+  npcs: NpcCombatant[];
+  version: number;
   started_at: Iso;
   ended_at: Iso | null;
 };

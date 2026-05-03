@@ -46,8 +46,21 @@ e2e quirks: `playwright.config.ts` boots its own `next dev` on port 3001 with `A
 4. **`runGmTurn()` generator** (`lib/ai/gm-agent.ts`) — streams `GmEvent`s. Inside:
    - `compactHistory()` from `rolling-summary.ts` keeps only the last 6 messages verbatim; older ones are replaced by a Haiku-generated summary stored in `sessions.summary` + `sessions.summary_cursor`. Regenerated every ~8 new messages.
    - `listEntitiesForCampaign()` from Neo4j (source of truth for campaign memory) injects up to 6 known entities into the system prompt ("Mémoire" block), with the session numbers where each was seen.
-   - LLM tool-use loop (max 6 iterations) — the model emits `request_roll`, `apply_damage`, `start_combat`, `cast_spell`, `prompt_companion`, etc. Each tool has a Zod input schema validated before side-effects.
+   - LLM tool-use loop (max 6 iterations) — the model emits `request_roll`, `apply_damage`, `start_combat`, `cast_spell`, `prompt_companion`, etc. Each tool has a Zod input schema validated before side-effects. **Note**: `next_turn` and `end_combat` no longer exist as tools — the server-authoritative combat loop handles them.
    - `hasRollDelegation()` safeguard: if the GM writes "Fais un jet" / "Lance un dé" **without** calling `request_roll`, the turn is swallowed and the model is re-prompted. Same pattern is tested in `tests/unit/gm-roll-delegation.test.ts`.
+
+### Combat loop (server-authoritative)
+
+`lib/server/combat-loop.ts` owns the encounter lifecycle. The LLM only declares NPC actions and rolls dice; the server handles turn advancement, KO skip, and end-of-combat detection.
+
+- `startEncounter` — rolls initiative for every PC/companion + provided NPCs, persists `combat_encounters` row with `participants_order` (kind-discriminated initiative list) and `npcs` JSONB. `version` int starts at 0 for optimistic CAS.
+- `advanceUntilNextActor` — increments `current_turn_index`, skipping participants at 0 PV; on a round wrap, ticks every participant's conditions (PCs in their `characters.conditions`, NPCs in the `npcs` JSONB). Auto-calls `endEncounter` when `checkAllNpcsDown(state)`.
+- `applyDamageToParticipant` — discriminates by `kind` from `participants_order`. NPCs mutate the `npcs` JSONB via `casUpdate` (reads version, increments, retries up to 3 times on conflict). PCs/companions write `characters.current_hp` directly — **no mirror in the encounter row**, `characters` is the source of truth.
+- `applyConditionToParticipant` — same routing for conditions.
+- `buildCombatState` — assembles the rich `CombatState` (round, currentTurnIndex, participants[]) by joining `npcs` JSONB with the `characters` rows for PC/companion entries. Emitted as the `combat_state` SSE event after every mutation; the client `<CombatTracker>` consumes it directly without refetching party rows.
+- `executeRoll` (gm-agent) auto-applies damage when `request_roll(kind=damage|heal, target_combatant_id=…)` is called, then triggers `advanceUntilNextActor` if it just downed an NPC.
+
+The two retired tools (`next_turn`, `end_combat`) are still in the sanitizer's `TOOL_NAMES` list so prose mentions are stripped from narration even if the model writes them.
 5. **Persist GM message** (Postgres `messages` table).
 6. **Fire-and-forget concierge** — `lib/ai/concierge.ts` reads the final narration via a second LLM call (with `jsonMode:true` on Ollama), extracts entities → Neo4j (with a stable UUID + `:APPEARS_IN` edge to the current `Session` node) and inventory/currency deltas → Postgres. Errors log via `console.warn('[concierge.*]')` in dev. **This is why Opus doesn't need `grant_item`/`adjust_currency` RÈGLE ABSOLUE anymore** — the janitor handles bookkeeping from prose. Campaign memory (`public.entities` Postgres table) has moved to Neo4j; the Postgres table is now DEPRECATED and no longer read or written.
 

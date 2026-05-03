@@ -2,12 +2,16 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState, useTransition } from 'react';
+import { CombatTracker } from '../../../../components/session/combat-tracker';
 import { DiceCard, type DiceCardProps } from '../../../../components/session/dice-card';
 import { Message, TypingIndicator } from '../../../../components/session/message';
 import { SessionSidebar } from '../../../../components/session/sidebar';
 import { BtnPrimary } from '../../../../components/ui/button';
 import { SlotRow, Stat } from '../../../../components/ui/stat';
 import type { CharacterRow, MessageRow } from '../../../../lib/db/types';
+import { CLASSES, SPECIES, WITCHER_CLASSES, WITCHER_SPECIES } from '../../../../lib/rules/srd';
+import { getActiveCombat } from '../../../../lib/server/combat-actions';
+import type { CombatState } from '../../../../lib/server/combat-loop';
 import { promptCompanion } from '../../../../lib/server/companion-actions';
 import type { InventoryItem } from '../../../../lib/server/inventory-actions';
 import { getParty } from '../../../../lib/server/party';
@@ -56,6 +60,7 @@ export function PlayClient({
   const [messages, setMessages] = useState<DisplayMessage[]>(() =>
     initialMessages.map((m) => toDisplay(m, companionMap)),
   );
+  const [combatState, setCombatState] = useState<CombatState | null>(null);
 
   async function refreshParty() {
     try {
@@ -66,6 +71,15 @@ export function PlayClient({
       // silent — next turn will retry
     }
   }
+
+  // Hydrate combat state on mount — there may already be an active encounter
+  // from a previous tab/session; the tracker should appear immediately.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sessionId is stable
+  useEffect(() => {
+    void getActiveCombat({ sessionId }).then((s) => {
+      if (s) setCombatState(s);
+    });
+  }, []);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -189,8 +203,22 @@ export function PlayClient({
             };
             setMessages((m) => [...m, diceMsg(roll)]);
           } else if (ev.event === 'combat') {
-            // Mid-stream state change (damage / heal / condition / start / end).
-            // Refresh party panel right away so HP bars move in real time.
+            const data = ev.data as
+              | { phase: 'started'; combatId: string }
+              | { phase: 'ended' }
+              | { phase: 'state'; state: CombatState };
+            if (data.phase === 'started') {
+              // The accompanying `state` payload arrives on the very next event.
+              // Optimistically clear any stale state so the tracker shows fresh.
+              setCombatState(null);
+            } else if (data.phase === 'state') {
+              setCombatState(data.state);
+            } else if (data.phase === 'ended') {
+              setCombatState(null);
+            }
+            void refreshParty();
+          } else if (ev.event === 'party') {
+            // Inventory / currency / slots / rest changed mid-turn.
             void refreshParty();
           } else if (ev.event === 'error') {
             const errText = (ev.data as { message: string }).message;
@@ -332,6 +360,7 @@ export function PlayClient({
                   player={player}
                   companions={companions}
                   onPromptCompanion={handlePromptCompanion}
+                  combatState={combatState}
                 />
               </div>
               {partyOpen && (
@@ -355,6 +384,7 @@ export function PlayClient({
                       campaignId={campaignId}
                       player={player}
                       companions={companions}
+                      combatState={combatState}
                       onPromptCompanion={(characterId) => {
                         setPartyOpen(false);
                         handlePromptCompanion(characterId);
@@ -453,11 +483,13 @@ function PlayerPanel({
   player,
   companions,
   onPromptCompanion,
+  combatState,
 }: {
   campaignId: string;
   player: CharacterRow | null;
   companions: CharacterRow[];
   onPromptCompanion: (characterId: string) => void;
+  combatState: CombatState | null;
 }) {
   const party: Array<{ row: CharacterRow; isMj: false; color: string; glyph: string }> = [];
   if (player) party.push({ row: player, isMj: false, color: 'var(--color-gold)', glyph: '⚜' });
@@ -472,6 +504,11 @@ function PlayerPanel({
 
   return (
     <aside className="flex w-[300px] shrink-0 flex-col overflow-auto border-l border-line bg-[rgba(0,0,0,0.3)]">
+      {combatState && (
+        <section className="border-b border-line px-3 py-3">
+          <CombatTracker state={combatState} />
+        </section>
+      )}
       <section className="border-b border-line px-5 py-5">
         <p className="mb-3 font-display text-[10px] uppercase tracking-[0.3em] text-gold">
           ✧ Autour du feu
@@ -669,8 +706,15 @@ function InventoryInline({
 }
 
 function roleLabel(c: CharacterRow): string {
-  const klass = c.class.charAt(0).toUpperCase() + c.class.slice(1);
-  return c.is_ai ? `${klass} · Allié` : `${klass} ${c.level}`;
+  const klass =
+    CLASSES[c.class]?.name ??
+    WITCHER_CLASSES[c.class]?.name ??
+    c.class.charAt(0).toUpperCase() + c.class.slice(1);
+  const species =
+    SPECIES[c.species]?.name ??
+    WITCHER_SPECIES[c.species]?.name ??
+    c.species.charAt(0).toUpperCase() + c.species.slice(1);
+  return c.is_ai ? `${species} · ${klass} · Allié` : `${species} · ${klass} ${c.level}`;
 }
 
 function statusLabel(c: CharacterRow): string {

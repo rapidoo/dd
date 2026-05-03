@@ -22,16 +22,7 @@ import { createSupabaseServiceClient } from '../db/server';
 import type { CharacterRow } from '../db/types';
 import { parseDiceExpression, rollD20, rollExpression } from '../rules/dice';
 import type { ConditionType } from '../rules/types';
-import {
-  activeEncounter,
-  advanceTurnEncounter,
-  applyDamageToCombatant,
-  endCombat,
-  healCombatant,
-  mutateEncounter,
-  startCombat,
-  toggleCondition,
-} from '../server/combat';
+import { getActiveCombatState, getActiveEncounter, startEncounter } from '../server/combat-loop';
 import { respondAsCompanion } from './companion-agent';
 import type { DiceRollRecord, GmEvent } from './gm-agent';
 import { executeRoll, renderCombatBlock } from './gm-agent';
@@ -153,7 +144,7 @@ export async function* runDebugCommand(
       yield say(
         `${cmd === 'damage' ? 'Dégâts' : 'Soins'} ${amount} sur ${player.name}. PV ${next}/${c.max_hp}.`,
       );
-      yield { type: 'combat_update' };
+      yield { type: 'party_update' };
       yield { type: 'done' };
       return;
     }
@@ -214,7 +205,7 @@ export async function* runDebugCommand(
       await supabase.from('characters').update({ inventory: nextItems }).eq('id', player.id);
 
       yield say('Butin ajouté : 25 po, 12 pa, 2 × Potion de soin, 1 × Lettre scellée.');
-      yield { type: 'combat_update' };
+      yield { type: 'party_update' };
       yield { type: 'done' };
       return;
     }
@@ -244,7 +235,7 @@ export async function* runDebugCommand(
       yield say(
         `Emplacement niv. ${level} consommé (${slot.max - slot.used - 1}/${slot.max} restants).`,
       );
-      yield { type: 'combat_update' };
+      yield { type: 'party_update' };
       yield { type: 'done' };
       return;
     }
@@ -290,7 +281,7 @@ export async function* runDebugCommand(
         await supabase.from('characters').update({ current_hp: next }).eq('id', player.id);
         yield say(`Repos court : 1d8 (${r.dice[0]}) + ${conMod} = +${gained} PV.`);
       }
-      yield { type: 'combat_update' };
+      yield { type: 'party_update' };
       yield { type: 'done' };
       return;
     }
@@ -302,14 +293,14 @@ export async function* runDebugCommand(
         yield { type: 'done' };
         return;
       }
-      const enc = await activeEncounter(sessionId);
+      const enc = await getActiveEncounter(sessionId);
       if (enc) {
         yield say('Un combat est déjà en cours.');
         yield { type: 'done' };
         return;
       }
       const characters = [player, ...companions].filter((c): c is CharacterRow => !!c);
-      const combat = await startCombat({
+      const state = await startEncounter({
         sessionId,
         npcs: [
           { name: 'Bandit arbalétrier', ac: 12, hp: 11, dexMod: 2 },
@@ -318,7 +309,8 @@ export async function* runDebugCommand(
         characters,
       });
       yield say('Combat lancé : 1 arbalétrier + 1 hachereau.');
-      yield { type: 'combat_started', combatId: combat.id };
+      yield { type: 'combat_started', combatId: state.combatId };
+      yield { type: 'combat_state', state };
       yield { type: 'done' };
       return;
     }
@@ -347,7 +339,9 @@ export async function* runDebugCommand(
       yield say(
         `Condition ${type} ${conditions.some((x) => x.type === type) ? 'retirée' : 'appliquée'}.`,
       );
-      yield { type: 'combat_update' };
+      yield { type: 'party_update' };
+      const debugState = await getActiveCombatState(sessionId).catch(() => null);
+      if (debugState) yield { type: 'combat_state', state: debugState };
       yield { type: 'done' };
       return;
     }
@@ -365,13 +359,13 @@ export async function* runDebugCommand(
         .select('*')
         .eq('session_id', sessionId)
         .order('created_at', { ascending: true });
-      const encounter = await activeEncounter(sessionId).catch(() => null);
+      const compState = await getActiveCombatState(sessionId).catch(() => null);
       const turn = await respondAsCompanion({
         sessionId,
         character: comp,
         history: history ?? [],
-        encounter,
-        combatBlock: renderCombatBlock(encounter),
+        combatState: compState,
+        combatBlock: renderCombatBlock(compState),
         executeRoll,
       });
       for (const ev of turn.events) yield ev;
@@ -394,13 +388,8 @@ export async function* runDebugCommand(
   }
 }
 
-// unused imports kept to preserve module boundary shape
+// Keep parseDiceExpression imported so the debug parser stays exposed for
+// future commands; rest of the helpers were removed with the combat refactor.
 export const _ref = {
-  applyDamageToCombatant,
-  advanceTurnEncounter,
-  endCombat,
-  healCombatant,
-  mutateEncounter,
-  toggleCondition,
   parseDiceExpression,
 };
